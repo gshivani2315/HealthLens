@@ -1,0 +1,20 @@
+{
+  "name": "healthlens-backend",
+  "version": "1.0.0",
+  "description": "HealthLens API - Node + Express + TypeScript",
+  "main": "src/server.ts",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.4",
+    "tsx": "^4.16.2",
+    "@types/node": "^20.14.11",
+    "@types/express": "^4.17.21"
+  }
+}

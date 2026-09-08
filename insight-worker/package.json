@@ -1,0 +1,19 @@
+{
+  "name": "healthlens-insight-worker",
+  "version": "1.0.0",
+  "description": "Consumes vitals.logged events, runs trend analysis + rules, calls Gemini, stores alerts/summaries",
+  "main": "src/consumer.ts",
+  "scripts": {
+    "dev": "tsx watch src/consumer.ts",
+    "build": "tsc",
+    "start": "node dist/consumer.js"
+  },
+  "dependencies": {
+    "kafkajs": "^2.2.4"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.4",
+    "tsx": "^4.16.2",
+    "@types/node": "^20.14.11"
+  }
+}
