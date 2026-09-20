@@ -254,3 +254,45 @@ This runs an ad-hoc aggregation of the past 7 days for a mock patient through `g
 - `overallTrend`
 - `bloodPressureStatus`
 - `lifestyleTip`
+
+# Setup
+
+## 1. Kafka (repo root)
+
+```bash
+docker compose up -d
+```
+
+## 2. Schema + migration (run from backend/ only)
+
+```bash
+cd backend
+npm i -D prisma@6 && npm i @prisma/client@6
+```
+# .env needs DATABASE_URL and DIRECT_URL (see notes below)
+```bash
+npx prisma migrate dev --name init_healthlens
+```
+# then run backend/prisma/extras.sql in the Supabase SQL editor
+
+## 3. Worker
+
+```bash
+cd ../insight
+npm i kafkajs @google/genai node-cron @prisma/client@6 dotenv zod
+npm i -D typescript tsx prisma@6 @types/node
+cp .env.example .env        # add GEMINI_API_KEY and DATABASE_URL
+npm run db:sync             # copies the schema and generates the client
+npm run typecheck
+npm run seed
+npm run dev
+```
+
+# Test
+
+```bash
+npm run publish:event -- patient_stable 118 78     # 1: normal, no alert
+npm run publish:event -- patient_critical 172 105  # 2: CRITICAL threshold alert + AI note
+npm run publish:event -- patient_rising 150 94     # 3: under 160, but AI_PATTERN alert
+npm run test:summary -- patient_rising             # 4: weekly summary on demand
+```
