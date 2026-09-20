@@ -1,0 +1,222 @@
+// HealthLens – shared schema. Single source of truth (migrations are run from /backend).
+// Written for Prisma 6.x. On Prisma 7, move url/directUrl into prisma.config.ts.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL") // Supabase pooled connection (port 6543, ?pgbouncer=true) for the API
+  directUrl = env("DIRECT_URL")   // Direct / session-pooler connection (port 5432) for migrations
+}
+
+// ───────────────────────────── Enums ─────────────────────────────
+
+enum Role {
+  PATIENT
+  DOCTOR
+}
+
+enum RiskStatus {
+  NORMAL
+  MODERATE
+  CRITICAL
+}
+
+enum GlucoseContext {
+  FASTING
+  POST_MEAL
+}
+
+enum AlertType {
+  THRESHOLD
+  AI_PATTERN
+}
+
+enum AlertSeverity {
+  INFO
+  CAUTION
+  CRITICAL
+}
+
+enum AlertStatus {
+  UNREAD
+  ACKNOWLEDGED
+  RESOLVED
+}
+
+enum AiRiskLevel {
+  LOW
+  MODERATE
+  HIGH
+}
+
+// ───────────────────────────── People ─────────────────────────────
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  password  String
+  name      String
+  role      Role     @default(PATIENT)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  patient Patient?
+  doctor  Doctor?
+}
+
+model Doctor {
+  id         String   @id @default(cuid())
+  userId     String   @unique
+  clinicName String?
+  phone      String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  user               User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  patients           Patient[]
+  acknowledgedAlerts Alert[]
+}
+
+model Patient {
+  id               String     @id @default(cuid())
+  userId           String     @unique
+  doctorId         String?
+  doctorAssignedAt DateTime?
+  dateOfBirth      DateTime?
+  gender           String?
+  phone            String?
+
+  // Maintained by insight-worker so the doctor roster is a cheap indexed read.
+  riskStatus    RiskStatus @default(NORMAL)
+  lastReadingAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user       User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  doctor     Doctor?            @relation(fields: [doctorId], references: [id], onDelete: SetNull)
+  conditions ChronicCondition[]
+  vitals     Vital[]
+  alerts     Alert[]
+  summaries  WeeklySummary[]
+  threshold  PatientThreshold?
+  insight    PatientInsight?
+
+  @@index([doctorId, riskStatus])
+  @@index([lastReadingAt])
+}
+
+model ChronicCondition {
+  id        String   @id @default(cuid())
+  patientId String
+  label     String // e.g. "Hypertension Stage 1"
+  createdAt DateTime @default(now())
+
+  patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@index([patientId])
+}
+
+// ───────────────────────────── Telemetry ─────────────────────────────
+// One row per submission (matches the LogVitals form). Every measurement is nullable;
+// see the CHECK constraints in the README steps.
+
+model Vital {
+  id             String          @id @default(cuid())
+  patientId      String
+  systolic       Int?
+  diastolic      Int?
+  glucose        Float? // mg/dL
+  glucoseContext GlucoseContext?
+  weightKg       Float?
+  sleepHours     Float?
+  heartRate      Int?
+  recordedAt     DateTime        @default(now())
+  createdAt      DateTime        @default(now())
+
+  patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@index([patientId, recordedAt(sort: Desc)])
+}
+
+// ───────────────────────────── Doctor-configured thresholds ─────────────────────────────
+// Worker reads this on every event. Missing row => worker falls back to defaults.
+
+model PatientThreshold {
+  patientId          String   @id
+  systolicMax        Int      @default(160)
+  diastolicMax       Int      @default(100)
+  glucoseFastingMax  Int      @default(130)
+  glucoseFastingMin  Int      @default(70)
+  glucosePostMealMax Int      @default(180)
+  weightDeltaKg      Float    @default(2)
+  weightDeltaDays    Int      @default(7)
+  updatedAt          DateTime @updatedAt
+
+  patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+}
+
+// ───────────────────────────── Intelligence output ─────────────────────────────
+
+model Alert {
+  id             String        @id @default(cuid())
+  patientId      String
+  type           AlertType
+  severity       AlertSeverity
+  status         AlertStatus   @default(UNREAD)
+  rule           String // machine-readable, e.g. BP_THRESHOLD, GLUCOSE_LOW, AI_PATTERN
+  triggerLabel   String // "Threshold: BP > 160/100"
+  detail         String?
+  aiRationale    String?
+  metrics        Json? // averages, slope, consecutive count, ...
+  vitalId        String? // reading that triggered it (threshold alerts)
+  dedupeKey      String        @unique // makes Kafka redelivery + retries idempotent
+  clinicalNote   String?
+  triggeredAt    DateTime      @default(now())
+  acknowledgedAt DateTime?
+  acknowledgedById String?
+  resolvedAt     DateTime?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  patient        Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  acknowledgedBy Doctor? @relation(fields: [acknowledgedById], references: [id], onDelete: SetNull)
+
+  @@index([patientId, triggeredAt(sort: Desc)])
+  @@index([status, severity])
+}
+
+// Latest Gemini clinical assessment (doctor "Gemini trend analysis" box). One row per patient.
+// Also acts as the LLM cache/cooldown marker, so Redis isn't needed for the MVP.
+model PatientInsight {
+  patientId   String      @id
+  narrative   String
+  riskLevel   AiRiskLevel
+  trend       String?
+  stats       Json?
+  generatedAt DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+}
+
+model WeeklySummary {
+  id          String   @id @default(cuid())
+  patientId   String
+  weekStart   DateTime // date-only, stored at 12:00Z to avoid timezone day-shift in the UI
+  weekEnd     DateTime
+  narrative   String
+  takeaways   String[]
+  trend       String? // IMPROVING | STABLE | WORSENING
+  stats       Json?
+  model       String?
+  generatedAt DateTime @default(now())
+
+  patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@unique([patientId, weekStart])
+  @@index([patientId, weekStart(sort: Desc)])
+}

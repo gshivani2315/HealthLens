@@ -4,9 +4,13 @@
   "description": "Consumes vitals.logged events, runs trend analysis + rules, calls Gemini, stores alerts/summaries",
   "main": "src/consumer.ts",
   "scripts": {
-    "dev": "tsx watch src/consumer.ts",
-    "build": "tsc",
-    "start": "node dist/consumer.js"
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "db:sync": "node scripts/sync-schema.js && prisma generate",
+    "seed": "tsx src/scripts/seed.ts",
+    "publish:event": "tsx src/scripts/publishEvent.ts",
+    "test:summary": "tsx src/scripts/runWeeklySummary.ts"
   },
   "dependencies": {
     "kafkajs": "^2.2.4"
