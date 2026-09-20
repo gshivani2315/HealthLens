@@ -269,11 +269,11 @@ docker compose up -d
 cd backend
 npm i -D prisma@6 && npm i @prisma/client@6
 ```
-# .env needs DATABASE_URL and DIRECT_URL (see notes below)
+### .env needs DATABASE_URL and DIRECT_URL (see notes below)
 ```bash
 npx prisma migrate dev --name init_healthlens
 ```
-# then run backend/prisma/extras.sql in the Supabase SQL editor
+### then run backend/prisma/extras.sql in the Supabase SQL editor
 
 ## 3. Worker
 
