@@ -150,3 +150,5 @@ node_modules
 .env
 dist
 prisma/schema.prisma
+
+backend/prisma/migrations

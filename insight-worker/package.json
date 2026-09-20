@@ -13,11 +13,17 @@
     "test:summary": "tsx src/scripts/runWeeklySummary.ts"
   },
   "dependencies": {
-    "kafkajs": "^2.2.4"
+    "@google/genai": "^2.23.0",
+    "@prisma/client": "^6.19.3",
+    "dotenv": "^18.0.1",
+    "kafkajs": "^2.2.4",
+    "node-cron": "^4.6.0",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
-    "typescript": "^5.5.4",
-    "tsx": "^4.16.2",
-    "@types/node": "^20.14.11"
+    "@types/node": "^20.19.43",
+    "prisma": "^6.19.3",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3"
   }
 }
