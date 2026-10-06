@@ -1,3 +1,42 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@layer base {
+  html {
+    @apply font-body text-ink;
+  }
+  body {
+    @apply bg-paper;
+  }
+  h1, h2, h3, h4 {
+    @apply font-display;
+  }
+  :focus-visible {
+    outline: 2px solid #0F6B66;
+    outline-offset: 2px;
+  }
+  ::selection {
+    background-color: #C7DEDC;
+  }
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+@layer components {
+  .input {
+    @apply w-full rounded border border-line px-3 py-2.5 text-sm text-ink placeholder:text-ink-300 focus:border-teal-400 focus:outline-none;
+  }
+}
+
+@layer utilities {
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background-color: #B1C1CE;
+    border-radius: 3px;
+  }
+}

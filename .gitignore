@@ -145,3 +145,10 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
+
+node_modules
+.env
+dist
+prisma/schema.prisma
+
+backend/prisma/migrations
