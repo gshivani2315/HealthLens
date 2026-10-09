@@ -152,3 +152,6 @@ dist
 prisma/schema.prisma
 
 backend/prisma/migrations
+
+.DS_Store
+insight-worker/.DS_Store
