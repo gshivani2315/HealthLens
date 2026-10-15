@@ -1,25 +1,70 @@
-import { useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
+import { useAuth } from "@/context/AuthContext";
+import { useToast } from "@/context/ToastContext";
 import { patientsService } from "@/services/patientsService";
 import { alertsService } from "@/services/alertsService";
-import { DoctorOverview, RiskStatus } from "@/types";
+import { CreatePatientPayload, DoctorOverview, PatientRosterRow, RiskStatus, UpdatePatientPayload } from "@/types";
 import Card, { CardHeader } from "@/components/ui/Card";
 import Badge from "@/components/ui/Badge";
+import Button from "@/components/ui/Button";
+import Modal from "@/components/ui/Modal";
 import Spinner from "@/components/ui/Spinner";
 import { cx, timeAgo } from "@/lib/utils";
 
 type RosterFilter = "all" | "critical" | "needs_review";
 
 export default function DoctorDashboard() {
+  const { user } = useAuth();
+  const { showToast } = useToast();
+  const doctorId = user?.id;
+
   const [params] = useSearchParams();
   const [overview, setOverview] = useState<DoctorOverview | null>(null);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState(params.get("q") ?? "");
   const [filter, setFilter] = useState<RosterFilter>("all");
 
+  // Modal states
+  const [isAddOpen, setIsAddOpen] = useState(false);
+  const [editingPatient, setEditingPatient] = useState<PatientRosterRow | null>(null);
+  const [deletingPatient, setDeletingPatient] = useState<PatientRosterRow | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+
+  // Add Patient Form State
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
+  const [dateOfBirth, setDateOfBirth] = useState("1980-01-01");
+  const [gender, setGender] = useState("Male");
+  const [conditionsInput, setConditionsInput] = useState("Hypertension Stage 1");
+  const [riskStatus, setRiskStatus] = useState<RiskStatus>("normal");
+  const [sys, setSys] = useState<number | "">("");
+  const [dia, setDia] = useState<number | "">("");
+  const [glu, setGlu] = useState<number | "">("");
+  const [weight, setWeight] = useState<number | "">("");
+
+  // Edit Patient Form State
+  const [editName, setEditName] = useState("");
+  const [editEmail, setEditEmail] = useState("");
+  const [editPhone, setEditPhone] = useState("");
+  const [editDateOfBirth, setEditDateOfBirth] = useState("");
+  const [editGender, setEditGender] = useState("Male");
+  const [editConditions, setEditConditions] = useState("");
+  const [editRiskStatus, setEditRiskStatus] = useState<RiskStatus>("normal");
+
+  function loadOverview() {
+    patientsService
+      .getDoctorOverview(doctorId)
+      .then(setOverview)
+      .catch((err) => console.error("Error loading overview:", err))
+      .finally(() => setLoading(false));
+  }
+
   useEffect(() => {
-    patientsService.getDoctorOverview().then(setOverview).finally(() => setLoading(false));
-  }, []);
+    loadOverview();
+  }, [doctorId]);
 
   async function acknowledge(alertId: string) {
     await alertsService.updateStatus(alertId, "acknowledged");
@@ -42,6 +87,128 @@ export default function DoctorDashboard() {
     return rows;
   }, [overview, filter, search]);
 
+  function resetAddForm() {
+    setName("");
+    setEmail("");
+    setPhone("");
+    setDateOfBirth("1980-01-01");
+    setGender("Male");
+    setConditionsInput("Hypertension Stage 1");
+    setRiskStatus("normal");
+    setSys("");
+    setDia("");
+    setGlu("");
+    setWeight("");
+    setFormError(null);
+  }
+
+  function openEditModal(patient: PatientRosterRow) {
+    setEditingPatient(patient);
+    setEditName(patient.name);
+    setEditEmail(patient.email || `${patient.name.toLowerCase().replace(/\s+/g, ".")}@example.com`);
+    setEditPhone(patient.phone || "+1 (555) 000-0000");
+    setEditDateOfBirth(patient.dateOfBirth || "1980-01-01");
+    setEditGender(patient.gender);
+    setEditConditions(patient.primaryCondition && patient.primaryCondition !== "—" ? patient.primaryCondition : "General Monitoring");
+    setEditRiskStatus(patient.riskStatus);
+    setFormError(null);
+  }
+
+  async function handleAddPatient(e: FormEvent) {
+    e.preventDefault();
+    setFormError(null);
+
+    if (!name.trim() || !email.trim() || !phone.trim() || !dateOfBirth) {
+      setFormError("Please fill in all required patient fields.");
+      return;
+    }
+
+    const conditions = conditionsInput
+      .split(",")
+      .map((c) => c.trim())
+      .filter(Boolean);
+
+    const payload: CreatePatientPayload = {
+      name: name.trim(),
+      email: email.trim(),
+      phone: phone.trim(),
+      dateOfBirth,
+      gender,
+      conditions: conditions.length > 0 ? conditions : ["General Monitoring"],
+      riskStatus,
+      initialSystolic: typeof sys === "number" ? sys : undefined,
+      initialDiastolic: typeof dia === "number" ? dia : undefined,
+      initialGlucose: typeof glu === "number" ? glu : undefined,
+      initialWeightKg: typeof weight === "number" ? weight : undefined,
+    };
+
+    setIsSubmitting(true);
+    try {
+      await patientsService.createPatient(payload, doctorId);
+      showToast(`Patient ${name.trim()} added successfully to your roster.`, "success");
+      setIsAddOpen(false);
+      resetAddForm();
+      loadOverview();
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : "Failed to add patient");
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
+  async function handleEditPatient(e: FormEvent) {
+    e.preventDefault();
+    if (!editingPatient) return;
+    setFormError(null);
+
+    if (!editName.trim() || !editEmail.trim() || !editPhone.trim()) {
+      setFormError("Please fill in all required fields.");
+      return;
+    }
+
+    const conditions = editConditions
+      .split(",")
+      .map((c) => c.trim())
+      .filter(Boolean);
+
+    const updates: UpdatePatientPayload = {
+      name: editName.trim(),
+      email: editEmail.trim(),
+      phone: editPhone.trim(),
+      dateOfBirth: editDateOfBirth,
+      gender: editGender,
+      conditions: conditions.length > 0 ? conditions : ["General Monitoring"],
+      riskStatus: editRiskStatus,
+    };
+
+    setIsSubmitting(true);
+    try {
+      await patientsService.updatePatient(editingPatient.id, updates);
+      showToast(`Patient ${editName.trim()} updated successfully.`, "success");
+      setEditingPatient(null);
+      loadOverview();
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : "Failed to update patient");
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
+  async function handleDeletePatient() {
+    if (!deletingPatient) return;
+    setIsSubmitting(true);
+    try {
+      await patientsService.deletePatient(deletingPatient.id);
+      showToast(`Patient ${deletingPatient.name} removed from your roster.`, "info");
+      setDeletingPatient(null);
+      loadOverview();
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Failed to remove patient", "error");
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
   if (loading || !overview) {
     return (
       <div className="flex h-64 items-center justify-center">
@@ -52,6 +219,7 @@ export default function DoctorDashboard() {
 
   return (
     <div className="page-enter mx-auto max-w-[1500px] space-y-5 sm:space-y-6">
+      {/* Hero Header */}
       <section className="editorial-hero health-card-dark relative overflow-hidden rounded-[1.5rem] px-5 py-5 sm:px-7 sm:py-6">
         <div className="pointer-events-none absolute -right-6 -top-16 h-56 w-56 rounded-full border border-[#D0D3C7] sm:right-10 sm:h-72 sm:w-72" />
         <div className="pointer-events-none absolute right-8 top-10 h-32 w-32 rounded-full border border-[#D0D3C7] sm:right-28 sm:top-14 sm:h-40 sm:w-40" />
@@ -59,23 +227,35 @@ export default function DoctorDashboard() {
         <div className="relative max-w-2xl">
           <p className="section-kicker text-[#B8D0C0]">CLINICAL WORKSPACE · DAILY BRIEFING</p>
           <h1 className="mt-3 font-display text-3xl font-normal tracking-[-.035em] text-white sm:text-4xl">Patient overview</h1>
-          <p className="mt-3 max-w-lg text-sm leading-relaxed text-white/70">A considered view of your patient roster, emerging risks, and the people who may need your attention today.</p>
+          <p className="mt-3 max-w-lg text-sm leading-relaxed text-white/70">
+            A considered view of your patient roster, emerging risks, and the people who may need your attention today.
+          </p>
           <div className="mt-5 inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-3 py-1.5 text-xs font-medium text-white/85">
-            <span className="h-2 w-2 rounded-full bg-moss-500" /> Live patient monitoring overview
+            <span className="h-2 w-2 rounded-full bg-moss-500" /> Physician: {user?.name ?? "Dr. Elena Ruiz"}
           </div>
         </div>
       </section>
 
+      {/* Stats Cards */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
         <StatCard label="Monitored patients" value={overview.totalPatients} />
         <StatCard label="Critical alerts pending" value={overview.criticalAlertsPending} tone="critical" />
         <StatCard label="Missing readings >48h" value={overview.missingReadings48h} tone="moderate" />
       </div>
 
+      {/* Urgent Alerts Section */}
       <Card className="editorial-card">
-        <CardHeader title="Urgent action center" subtitle="Active flags that may need your attention" action={<span className="rounded-full border border-[#EBCFC5] bg-[#F7EAE5] px-2.5 py-1 text-[11px] font-semibold text-brick-600">{overview.urgentAlerts.filter((a) => a.status === "unread").length} pending</span>} />
+        <CardHeader
+          title="Urgent action center"
+          subtitle="Active flags that may need your attention"
+          action={
+            <span className="rounded-full border border-[#EBCFC5] bg-[#F7EAE5] px-2.5 py-1 text-[11px] font-semibold text-brick-600">
+              {overview.urgentAlerts.filter((a) => a.status === "unread").length} pending
+            </span>
+          }
+        />
         {overview.urgentAlerts.length === 0 ? (
-          <p className="text-sm text-ink-400">No urgent alerts right now.</p>
+          <p className="text-sm text-ink-400">No urgent alerts for your patients right now.</p>
         ) : (
           <ul className="space-y-3">
             {overview.urgentAlerts.map((a) => (
@@ -113,11 +293,30 @@ export default function DoctorDashboard() {
         )}
       </Card>
 
+      {/* Patient Care Roster with Add, Edit, Delete */}
       <Card padded={false}>
         <div className="flex flex-col gap-4 border-b border-line/80 p-5 sm:flex-row sm:items-center sm:justify-between sm:px-6">
           <div>
-            <h3 className="font-display text-xl font-normal text-ink">Assigned patients</h3>
-            <p className="mt-1 text-sm text-ink-400">{roster.length} {roster.length === 1 ? "patient" : "patients"} in this view</p>
+            <div className="flex items-center gap-3">
+              <h3 className="font-display text-xl font-normal text-ink">Assigned patients</h3>
+              <button
+                type="button"
+                onClick={() => {
+                  resetAddForm();
+                  setIsAddOpen(true);
+                }}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-teal-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition-all hover:bg-teal-700"
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                  <line x1="12" y1="5" x2="12" y2="19" />
+                  <line x1="5" y1="12" x2="19" y2="12" />
+                </svg>
+                Add Patient
+              </button>
+            </div>
+            <p className="mt-1 text-sm text-ink-400">
+              {roster.length} {roster.length === 1 ? "patient" : "patients"} linked to your care
+            </p>
           </div>
           <div className="flex flex-col gap-2 sm:flex-row">
             <input
@@ -133,13 +332,13 @@ export default function DoctorDashboard() {
                   ["critical", "Critical only"],
                   ["needs_review", "Needs review"],
                 ] as [RosterFilter, string][]
-              ).map(([value, label]) => (
+              ).map(([val, label]) => (
                 <button
-                  key={value}
-                  onClick={() => setFilter(value)}
+                  key={val}
+                  onClick={() => setFilter(val)}
                   className={cx(
                     "whitespace-nowrap rounded-lg px-3 py-2 text-xs font-semibold transition-all",
-                    filter === value ? "bg-white text-ink shadow-sm" : "bg-transparent text-ink-500 hover:bg-white/70"
+                    filter === val ? "bg-white text-ink shadow-sm" : "bg-transparent text-ink-500 hover:bg-white/70"
                   )}
                 >
                   {label}
@@ -159,13 +358,16 @@ export default function DoctorDashboard() {
                 <th className="px-4 py-3 font-medium">Latest BP</th>
                 <th className="px-4 py-3 font-medium">Latest glucose</th>
                 <th className="px-4 py-3 font-medium">Risk</th>
-                <th className="px-4 py-3 font-medium" />
+                <th className="px-4 py-3 text-right font-medium">Manage</th>
               </tr>
             </thead>
             <tbody>
               {roster.map((p) => (
                 <tr key={p.id} className="table-row-hover border-b border-line/70 last:border-0 hover:bg-[#DDE7DF]">
-                  <td className="px-4 py-4 font-semibold text-ink">{p.name}</td>
+                  <td className="px-4 py-4">
+                    <p className="font-semibold text-ink">{p.name}</p>
+                    {p.email && <p className="text-xs text-ink-400">{p.email}</p>}
+                  </td>
                   <td className="px-4 py-4 text-ink-500">
                     {p.age} / {p.gender}
                   </td>
@@ -178,16 +380,60 @@ export default function DoctorDashboard() {
                     <Badge tone={p.riskStatus}>{p.riskStatus}</Badge>
                   </td>
                   <td className="px-4 py-4 text-right">
-                    <Link to={`/doctor/patients/${p.id}`} className="inline-flex items-center gap-1 text-sm font-semibold text-teal-600 hover:gap-2">
-                      View
-                    </Link>
+                    <div className="inline-flex items-center gap-2">
+                      <Link
+                        to={`/doctor/patients/${p.id}`}
+                        className="rounded border border-line bg-white px-2.5 py-1 text-xs font-semibold text-teal-600 shadow-sm hover:border-teal-400 hover:text-teal-700"
+                      >
+                        View
+                      </Link>
+                      <button
+                        type="button"
+                        onClick={() => openEditModal(p)}
+                        className="rounded border border-line bg-white px-2.5 py-1 text-xs font-semibold text-ink-600 shadow-sm hover:border-ink-400 hover:text-ink"
+                      >
+                        Edit
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setDeletingPatient(p)}
+                        className="rounded border border-line bg-white px-2.5 py-1 text-xs font-semibold text-brick-600 shadow-sm hover:border-brick-300 hover:bg-brick-50"
+                      >
+                        Delete
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
               {roster.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="px-4 py-8 text-center text-sm text-ink-400">
-                    No patients match this filter.
+                  <td colSpan={7} className="px-4 py-12 text-center text-sm text-ink-400">
+                    <div className="mx-auto max-w-sm space-y-3">
+                      <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-ink-100 text-ink-500">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                          <circle cx="12" cy="7" r="4" />
+                          <path d="M5.5 21a8.38 8.38 0 0 1 13 0" />
+                        </svg>
+                      </div>
+                      <p className="font-display text-base font-semibold text-ink">No patients in this view</p>
+                      <p className="text-xs text-ink-400">
+                        {overview.totalPatients === 0
+                          ? "You don't have any patients linked to your roster yet. Add your first patient to begin tracking vitals."
+                          : "No patients matched your search or risk filter criteria."}
+                      </p>
+                      {overview.totalPatients === 0 && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            resetAddForm();
+                            setIsAddOpen(true);
+                          }}
+                          className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-teal-600 px-4 py-2 text-xs font-semibold text-white shadow-sm hover:bg-teal-700"
+                        >
+                          + Add First Patient
+                        </button>
+                      )}
+                    </div>
                   </td>
                 </tr>
               )}
@@ -195,6 +441,279 @@ export default function DoctorDashboard() {
           </table>
         </div>
       </Card>
+
+      {/* ADD PATIENT MODAL */}
+      <Modal open={isAddOpen} onClose={() => setIsAddOpen(false)} title="Add New Patient">
+        <form onSubmit={handleAddPatient} className="space-y-4">
+          <p className="text-xs text-ink-400">
+            Register a patient under your care. The patient will be linked to physician {user?.name ?? "Dr. Elena Ruiz"}.
+          </p>
+
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-ink">Full Name *</label>
+              <input
+                type="text"
+                required
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="e.g. Eleanor Vance"
+                className="w-full rounded border border-line px-3 py-2 text-sm text-ink focus:border-teal-400 focus:outline-none"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-ink">Email *</label>
+              <input
+                type="email"
+                required
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="eleanor.vance@example.com"
+                className="w-full rounded border border-line px-3 py-2 text-sm text-ink focus:border-teal-400 focus:outline-none"
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-ink">Phone *</label>
+              <input
+                type="tel"
+                required
+                value={phone}
+                onChange={(e) => setPhone(e.target.value)}
+                placeholder="+1 (555) 012-3456"
+                className="w-full rounded border border-line px-3 py-2 text-sm text-ink focus:border-teal-400 focus:outline-none"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-ink">Date of Birth *</label>
+              <input
+                type="date"
+                required
+                value={dateOfBirth}
+                onChange={(e) => setDateOfBirth(e.target.value)}
+                className="w-full rounded border border-line px-3 py-2 text-sm text-ink focus:border-teal-400 focus:outline-none"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-ink">Gender *</label>
+              <select
+                value={gender}
+                onChange={(e) => setGender(e.target.value)}
+                className="w-full rounded border border-line px-3 py-2 text-sm text-ink focus:border-teal-400 focus:outline-none"
+              >
+                <option value="Male">Male</option>
+                <option value="Female">Female</option>
+                <option value="Other">Other</option>
+                <option value="Prefer not to say">Prefer not to say</option>
+              </select>
+            </div>
+          </div>
+
+          <div>
+            <label className="mb-1 block text-xs font-semibold text-ink">
+              Chronic Conditions (comma-separated) *
+            </label>
+            <input
+              type="text"
+              required
+              value={conditionsInput}
+              onChange={(e) => setConditionsInput(e.target.value)}
+              placeholder="e.g. Hypertension Stage 1, Type 2 Diabetes"
+              className="w-full rounded border border-line px-3 py-2 text-sm text-ink focus:border-teal-400 focus:outline-none"
+            />
+          </div>
+
+          <div>
+            <label className="mb-1 block text-xs font-semibold text-ink">Initial Clinical Risk Assessment</label>
+            <select
+              value={riskStatus}
+              onChange={(e) => setRiskStatus(e.target.value as RiskStatus)}
+              className="w-full rounded border border-line px-3 py-2 text-sm text-ink focus:border-teal-400 focus:outline-none"
+            >
+              <option value="normal">Normal</option>
+              <option value="moderate">Moderate</option>
+              <option value="critical">Critical</option>
+            </select>
+          </div>
+
+          <div className="rounded-lg border border-dashed border-line bg-paper p-3">
+            <p className="mb-2 text-xs font-semibold text-ink">Initial Baseline Readings (Optional)</p>
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+              <div>
+                <label className="block text-[11px] text-ink-500">Systolic</label>
+                <input
+                  type="number"
+                  placeholder="120"
+                  value={sys}
+                  onChange={(e) => setSys(e.target.value ? Number(e.target.value) : "")}
+                  className="w-full rounded border border-line px-2 py-1.5 text-xs text-ink"
+                />
+              </div>
+              <div>
+                <label className="block text-[11px] text-ink-500">Diastolic</label>
+                <input
+                  type="number"
+                  placeholder="80"
+                  value={dia}
+                  onChange={(e) => setDia(e.target.value ? Number(e.target.value) : "")}
+                  className="w-full rounded border border-line px-2 py-1.5 text-xs text-ink"
+                />
+              </div>
+              <div>
+                <label className="block text-[11px] text-ink-500">Glucose (mg/dL)</label>
+                <input
+                  type="number"
+                  placeholder="100"
+                  value={glu}
+                  onChange={(e) => setGlu(e.target.value ? Number(e.target.value) : "")}
+                  className="w-full rounded border border-line px-2 py-1.5 text-xs text-ink"
+                />
+              </div>
+              <div>
+                <label className="block text-[11px] text-ink-500">Weight (kg)</label>
+                <input
+                  type="number"
+                  placeholder="70"
+                  value={weight}
+                  onChange={(e) => setWeight(e.target.value ? Number(e.target.value) : "")}
+                  className="w-full rounded border border-line px-2 py-1.5 text-xs text-ink"
+                />
+              </div>
+            </div>
+          </div>
+
+          {formError && <p className="text-sm text-brick-600">{formError}</p>}
+
+          <div className="flex justify-end gap-2 pt-2">
+            <Button type="button" variant="secondary" onClick={() => setIsAddOpen(false)}>
+              Cancel
+            </Button>
+            <Button type="submit" isLoading={isSubmitting}>
+              Add Patient to Care Roster
+            </Button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* EDIT PATIENT MODAL */}
+      <Modal open={!!editingPatient} onClose={() => setEditingPatient(null)} title={`Edit Patient: ${editingPatient?.name}`}>
+        <form onSubmit={handleEditPatient} className="space-y-4">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-ink">Full Name *</label>
+              <input
+                type="text"
+                required
+                value={editName}
+                onChange={(e) => setEditName(e.target.value)}
+                className="w-full rounded border border-line px-3 py-2 text-sm text-ink focus:border-teal-400 focus:outline-none"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-ink">Email *</label>
+              <input
+                type="email"
+                required
+                value={editEmail}
+                onChange={(e) => setEditEmail(e.target.value)}
+                className="w-full rounded border border-line px-3 py-2 text-sm text-ink focus:border-teal-400 focus:outline-none"
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-ink">Phone *</label>
+              <input
+                type="tel"
+                required
+                value={editPhone}
+                onChange={(e) => setEditPhone(e.target.value)}
+                className="w-full rounded border border-line px-3 py-2 text-sm text-ink focus:border-teal-400 focus:outline-none"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-ink">Date of Birth</label>
+              <input
+                type="date"
+                value={editDateOfBirth}
+                onChange={(e) => setEditDateOfBirth(e.target.value)}
+                className="w-full rounded border border-line px-3 py-2 text-sm text-ink focus:border-teal-400 focus:outline-none"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-ink">Gender</label>
+              <select
+                value={editGender}
+                onChange={(e) => setEditGender(e.target.value)}
+                className="w-full rounded border border-line px-3 py-2 text-sm text-ink focus:border-teal-400 focus:outline-none"
+              >
+                <option value="Male">Male</option>
+                <option value="Female">Female</option>
+                <option value="Other">Other</option>
+                <option value="Prefer not to say">Prefer not to say</option>
+              </select>
+            </div>
+          </div>
+
+          <div>
+            <label className="mb-1 block text-xs font-semibold text-ink">Conditions (comma-separated)</label>
+            <input
+              type="text"
+              value={editConditions}
+              onChange={(e) => setEditConditions(e.target.value)}
+              className="w-full rounded border border-line px-3 py-2 text-sm text-ink focus:border-teal-400 focus:outline-none"
+            />
+          </div>
+
+          <div>
+            <label className="mb-1 block text-xs font-semibold text-ink">Clinical Risk Assessment</label>
+            <select
+              value={editRiskStatus}
+              onChange={(e) => setEditRiskStatus(e.target.value as RiskStatus)}
+              className="w-full rounded border border-line px-3 py-2 text-sm text-ink focus:border-teal-400 focus:outline-none"
+            >
+              <option value="normal">Normal</option>
+              <option value="moderate">Moderate</option>
+              <option value="critical">Critical</option>
+            </select>
+          </div>
+
+          {formError && <p className="text-sm text-brick-600">{formError}</p>}
+
+          <div className="flex justify-end gap-2 pt-2">
+            <Button type="button" variant="secondary" onClick={() => setEditingPatient(null)}>
+              Cancel
+            </Button>
+            <Button type="submit" isLoading={isSubmitting}>
+              Save Changes
+            </Button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* DELETE CONFIRMATION MODAL */}
+      <Modal open={!!deletingPatient} onClose={() => setDeletingPatient(null)} title="Remove Patient">
+        <div className="space-y-4">
+          <p className="text-sm text-ink">
+            Are you sure you want to remove <span className="font-semibold text-ink">{deletingPatient?.name}</span> from
+            your care roster?
+          </p>
+          <p className="text-xs text-ink-400">
+            This will unassign the patient from your clinical supervision and remove their records from active telemetry monitoring.
+          </p>
+          <div className="flex justify-end gap-2 pt-3">
+            <Button variant="secondary" onClick={() => setDeletingPatient(null)}>
+              Cancel
+            </Button>
+            <Button variant="danger" isLoading={isSubmitting} onClick={handleDeletePatient}>
+              Remove Patient
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }

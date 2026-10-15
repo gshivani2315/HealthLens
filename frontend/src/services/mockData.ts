@@ -35,6 +35,19 @@ export const mockDoctor: Doctor = {
   assignedDate: "2024-11-03",
 };
 
+export const mockDoctors: Record<string, Doctor> = {
+  doc_001: mockDoctor,
+};
+
+export function registerDoctorMock(doctor: Doctor) {
+  mockDoctors[doctor.id] = doctor;
+}
+
+export function getDoctorById(id?: string): Doctor {
+  if (id && mockDoctors[id]) return mockDoctors[id];
+  return mockDoctor;
+}
+
 const conditionsA: ChronicCondition[] = [
   { id: "c1", label: "Hypertension Stage 1" },
   { id: "c2", label: "Type 2 Diabetes" },
@@ -44,6 +57,7 @@ const conditionsC: ChronicCondition[] = [{ id: "c4", label: "Hypertension Stage 
 
 export const mockPatientProfile: PatientProfile = {
   id: "pat_001",
+  doctorId: "doc_001",
   name: "Marcus Bell",
   dateOfBirth: "1968-04-12",
   age: 57,
@@ -56,7 +70,11 @@ export const mockPatientProfile: PatientProfile = {
 
 interface RosterSeed {
   id: string;
+  doctorId: string;
   name: string;
+  email: string;
+  phone: string;
+  dateOfBirth: string;
   age: number;
   gender: string;
   conditions: ChronicCondition[];
@@ -64,13 +82,13 @@ interface RosterSeed {
   risk: "normal" | "moderate" | "critical";
 }
 
-const rosterSeeds: RosterSeed[] = [
-  { id: "pat_001", name: "Marcus Bell", age: 57, gender: "Male", conditions: conditionsA, base: { sys: 148, dia: 94, glu: 152, weight: 88, sleep: 6.2 }, risk: "critical" },
-  { id: "pat_002", name: "Aiko Tanaka", age: 63, gender: "Female", conditions: conditionsC, base: { sys: 132, dia: 84, glu: 110, weight: 71, sleep: 6.8 }, risk: "moderate" },
-  { id: "pat_003", name: "Priya Nair", age: 45, gender: "Female", conditions: conditionsB, base: { sys: 118, dia: 76, glu: 101, weight: 64, sleep: 7.4 }, risk: "normal" },
-  { id: "pat_004", name: "Daniel Osei", age: 51, gender: "Male", conditions: conditionsA, base: { sys: 126, dia: 80, glu: 118, weight: 92, sleep: 6.5 }, risk: "moderate" },
-  { id: "pat_005", name: "Helen Cho", age: 70, gender: "Female", conditions: conditionsC, base: { sys: 121, dia: 78, glu: 96, weight: 58, sleep: 7.1 }, risk: "normal" },
-  { id: "pat_006", name: "Tobias Reyes", age: 39, gender: "Male", conditions: conditionsB, base: { sys: 116, dia: 74, glu: 99, weight: 76, sleep: 7.6 }, risk: "normal" },
+let rosterSeeds: RosterSeed[] = [
+  { id: "pat_001", doctorId: "doc_001", name: "Marcus Bell", email: "marcus.bell@example.com", phone: "+1 (555) 402-8871", dateOfBirth: "1968-04-12", age: 57, gender: "Male", conditions: conditionsA, base: { sys: 148, dia: 94, glu: 152, weight: 88, sleep: 6.2 }, risk: "critical" },
+  { id: "pat_002", doctorId: "doc_001", name: "Aiko Tanaka", email: "aiko.tanaka@example.com", phone: "+1 (555) 402-8872", dateOfBirth: "1962-09-18", age: 63, gender: "Female", conditions: conditionsC, base: { sys: 132, dia: 84, glu: 110, weight: 71, sleep: 6.8 }, risk: "moderate" },
+  { id: "pat_003", doctorId: "doc_001", name: "Priya Nair", email: "priya.nair@example.com", phone: "+1 (555) 402-8873", dateOfBirth: "1980-01-22", age: 45, gender: "Female", conditions: conditionsB, base: { sys: 118, dia: 76, glu: 101, weight: 64, sleep: 7.4 }, risk: "normal" },
+  { id: "pat_004", doctorId: "doc_001", name: "Daniel Osei", email: "daniel.osei@example.com", phone: "+1 (555) 402-8874", dateOfBirth: "1974-06-30", age: 51, gender: "Male", conditions: conditionsA, base: { sys: 126, dia: 80, glu: 118, weight: 92, sleep: 6.5 }, risk: "moderate" },
+  { id: "pat_005", doctorId: "doc_001", name: "Helen Cho", email: "helen.cho@example.com", phone: "+1 (555) 402-8875", dateOfBirth: "1955-11-05", age: 70, gender: "Female", conditions: conditionsC, base: { sys: 121, dia: 78, glu: 96, weight: 58, sleep: 7.1 }, risk: "normal" },
+  { id: "pat_006", doctorId: "doc_001", name: "Tobias Reyes", email: "tobias.reyes@example.com", phone: "+1 (555) 402-8876", dateOfBirth: "1986-03-14", age: 39, gender: "Male", conditions: conditionsB, base: { sys: 116, dia: 74, glu: 99, weight: 76, sleep: 7.6 }, risk: "normal" },
 ];
 
 export function generateVitalsHistory(patientId: string, days = 90): VitalsEntry[] {
@@ -93,15 +111,24 @@ export function generateVitalsHistory(patientId: string, days = 90): VitalsEntry
   return entries;
 }
 
-export function getRoster(): PatientRosterRow[] {
-  return rosterSeeds.map((s) => {
+export function getRoster(doctorId?: string): PatientRosterRow[] {
+  let list = rosterSeeds;
+  if (doctorId) {
+    list = rosterSeeds.filter((s) => s.doctorId === doctorId);
+  }
+  return list.map((s) => {
     const latest = generateVitalsHistory(s.id, 1)[1] ?? generateVitalsHistory(s.id, 1)[0];
     return {
       id: s.id,
+      doctorId: s.doctorId,
       name: s.name,
+      email: s.email,
+      phone: s.phone,
+      dateOfBirth: s.dateOfBirth,
       age: s.age,
       gender: s.gender,
       primaryCondition: s.conditions[0]?.label ?? "—",
+      conditions: s.conditions,
       latestBloodPressure: { systolic: latest.systolic!, diastolic: latest.diastolic! },
       latestGlucose: latest.glucose!,
       riskStatus: s.risk,
@@ -110,18 +137,133 @@ export function getRoster(): PatientRosterRow[] {
   });
 }
 
+function calculateAge(dateOfBirth: string): number {
+  const dob = new Date(dateOfBirth);
+  const diffMs = Date.now() - dob.getTime();
+  const ageDt = new Date(diffMs);
+  return Math.abs(ageDt.getUTCFullYear() - 1970) || 40;
+}
+
+export function createPatientMock(
+  payload: import("@/types").CreatePatientPayload,
+  doctorId = "doc_001"
+): PatientRosterRow {
+  const newId = `pat_${Date.now()}`;
+  const age = calculateAge(payload.dateOfBirth);
+  const conditions: ChronicCondition[] = (payload.conditions || []).map((label, idx) => ({
+    id: `c_${Date.now()}_${idx}`,
+    label,
+  }));
+  if (conditions.length === 0) {
+    conditions.push({ id: `c_${Date.now()}_0`, label: "General Monitoring" });
+  }
+
+  const newSeed: RosterSeed = {
+    id: newId,
+    doctorId,
+    name: payload.name,
+    email: payload.email,
+    phone: payload.phone,
+    dateOfBirth: payload.dateOfBirth,
+    age,
+    gender: payload.gender || "Other",
+    conditions,
+    base: {
+      sys: payload.initialSystolic || 120,
+      dia: payload.initialDiastolic || 80,
+      glu: payload.initialGlucose || 95,
+      weight: payload.initialWeightKg || 70,
+      sleep: payload.initialSleepHours || 7,
+    },
+    risk: payload.riskStatus || "normal",
+  };
+
+  rosterSeeds.unshift(newSeed);
+
+  mockThresholds[newId] = {
+    patientId: newId,
+    systolicMax: 160,
+    diastolicMax: 100,
+    glucoseFastingMax: 130,
+    glucoseFastingMin: 70,
+    glucosePostMealMax: 180,
+    weightDeltaKg: 2,
+    weightDeltaDays: 7,
+  };
+
+  const latest = generateVitalsHistory(newId, 1)[1] ?? generateVitalsHistory(newId, 1)[0];
+  return {
+    id: newId,
+    doctorId,
+    name: newSeed.name,
+    email: newSeed.email,
+    phone: newSeed.phone,
+    dateOfBirth: newSeed.dateOfBirth,
+    age: newSeed.age,
+    gender: newSeed.gender,
+    primaryCondition: newSeed.conditions[0]?.label ?? "—",
+    conditions: newSeed.conditions,
+    latestBloodPressure: { systolic: latest.systolic!, diastolic: latest.diastolic! },
+    latestGlucose: latest.glucose!,
+    riskStatus: newSeed.risk,
+    lastReadingAt: latest.recordedAt,
+  };
+}
+
+export function updatePatientMock(
+  patientId: string,
+  updates: import("@/types").UpdatePatientPayload
+): PatientProfile {
+  const seed = rosterSeeds.find((r) => r.id === patientId);
+  if (!seed) throw new Error("Patient not found");
+
+  if (updates.name) seed.name = updates.name;
+  if (updates.email) seed.email = updates.email;
+  if (updates.phone) seed.phone = updates.phone;
+  if (updates.gender) seed.gender = updates.gender;
+  if (updates.dateOfBirth) {
+    seed.dateOfBirth = updates.dateOfBirth;
+    seed.age = calculateAge(updates.dateOfBirth);
+  }
+  if (updates.riskStatus) seed.risk = updates.riskStatus;
+  if (updates.conditions) {
+    seed.conditions = updates.conditions.map((lbl, idx) => ({
+      id: `c_${patientId}_${idx}`,
+      label: lbl,
+    }));
+  }
+
+  return getPatientProfileById(patientId);
+}
+
+export function deletePatientMock(patientId: string): void {
+  const idx = rosterSeeds.findIndex((r) => r.id === patientId);
+  if (idx !== -1) {
+    rosterSeeds.splice(idx, 1);
+  }
+  delete mockThresholds[patientId];
+  // Remove related alerts
+  for (let i = mockAlerts.length - 1; i >= 0; i--) {
+    if (mockAlerts[i].patientId === patientId) {
+      mockAlerts.splice(i, 1);
+    }
+  }
+}
+
 export function getPatientProfileById(id: string): PatientProfile {
   const seed = rosterSeeds.find((r) => r.id === id) ?? rosterSeeds[0];
+  const doc = getDoctorById(seed.doctorId);
   return {
     id: seed.id,
+    doctorId: seed.doctorId,
     name: seed.name,
-    dateOfBirth: "1968-04-12",
+    dateOfBirth: seed.dateOfBirth || "1968-04-12",
     age: seed.age,
     gender: seed.gender,
-    phone: "+1 (555) 402-8871",
-    email: `${seed.name.toLowerCase().replace(/\s+/g, ".")}@example.com`,
+    phone: seed.phone || "+1 (555) 402-8871",
+    email: seed.email || `${seed.name.toLowerCase().replace(/\s+/g, ".")}@example.com`,
     conditions: seed.conditions,
-    doctor: mockDoctor,
+    doctor: doc,
   };
 }
 

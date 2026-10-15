@@ -1,19 +1,32 @@
 // Backend contract:
-//   GET   /patients/:id/profile         -> PatientProfile
-//   PATCH /patients/:id/profile         { partial fields } -> PatientProfile
-//   GET   /doctor/overview              -> DoctorOverview
-//   GET   /doctor/patients/:id          -> PatientDetail
-//   GET   /doctor/patients?search=&filter=critical|needs_review -> PatientRosterRow[]
+//   GET    /patients/:id/profile         -> PatientProfile
+//   PATCH  /patients/:id/profile         { partial fields } -> PatientProfile
+//   GET    /doctor/overview              -> DoctorOverview
+//   GET    /doctor/patients/:id          -> PatientDetail
+//   GET    /doctor/patients?search=&filter=critical|needs_review -> PatientRosterRow[]
+//   POST   /doctor/patients              { ...CreatePatientPayload } -> PatientRosterRow
+//   PATCH  /doctor/patients/:id          { ...UpdatePatientPayload } -> PatientProfile
+//   DELETE /doctor/patients/:id          -> 204
 
 import { apiClient, mockDelay, USE_MOCKS } from "./apiClient";
-import { DoctorOverview, PatientDetail, PatientProfile, PatientRosterRow } from "@/types";
 import {
+  CreatePatientPayload,
+  DoctorOverview,
+  PatientDetail,
+  PatientProfile,
+  PatientRosterRow,
+  UpdatePatientPayload,
+} from "@/types";
+import {
+  createPatientMock,
+  deletePatientMock,
   generateVitalsHistory,
   getAlertsForPatient,
   getPatientProfileById,
   getRoster,
   mockAlerts,
   mockPatientProfile,
+  updatePatientMock,
 } from "./mockData";
 
 export const patientsService = {
@@ -27,29 +40,40 @@ export const patientsService = {
     return apiClient.patch<PatientProfile>(`/patients/${patientId}/profile`, updates);
   },
 
-  async getDoctorOverview(): Promise<DoctorOverview> {
+  async getDoctorOverview(doctorId?: string): Promise<DoctorOverview> {
     if (USE_MOCKS) {
-      const roster = getRoster();
+      const roster = getRoster(doctorId);
+      const patientIds = new Set(roster.map((r) => r.id));
+      const alertsForDoctor = mockAlerts.filter((a) => patientIds.has(a.patientId));
       return mockDelay({
         totalPatients: roster.length,
-        criticalAlertsPending: mockAlerts.filter((a) => a.severity === "critical" && a.status === "unread").length,
-        missingReadings48h: 1,
-        urgentAlerts: mockAlerts.filter((a) => a.status === "unread"),
+        criticalAlertsPending: alertsForDoctor.filter((a) => a.severity === "critical" && a.status === "unread").length,
+        missingReadings48h: roster.length > 0 ? 1 : 0,
+        urgentAlerts: alertsForDoctor.filter((a) => a.status === "unread"),
         roster,
       });
     }
-    return apiClient.get<DoctorOverview>("/doctor/overview");
+    const query = doctorId ? `?doctorId=${encodeURIComponent(doctorId)}` : "";
+    return apiClient.get<DoctorOverview>(`/doctor/overview${query}`);
   },
 
-  async getRoster(search = "", filter: "all" | "critical" | "needs_review" = "all"): Promise<PatientRosterRow[]> {
+  async getRoster(
+    search = "",
+    filter: "all" | "critical" | "needs_review" = "all",
+    doctorId?: string
+  ): Promise<PatientRosterRow[]> {
     if (USE_MOCKS) {
-      let roster = getRoster();
+      let roster = getRoster(doctorId);
       if (filter === "critical") roster = roster.filter((r) => r.riskStatus === "critical");
       if (filter === "needs_review") roster = roster.filter((r) => r.riskStatus !== "normal");
       if (search) roster = roster.filter((r) => r.name.toLowerCase().includes(search.toLowerCase()));
       return mockDelay(roster);
     }
-    return apiClient.get<PatientRosterRow[]>(`/doctor/patients?search=${encodeURIComponent(search)}&filter=${filter}`);
+    const params = new URLSearchParams();
+    if (search) params.set("search", search);
+    if (filter !== "all") params.set("filter", filter);
+    if (doctorId) params.set("doctorId", doctorId);
+    return apiClient.get<PatientRosterRow[]>(`/doctor/patients?${params.toString()}`);
   },
 
   async getPatientDetail(patientId: string): Promise<PatientDetail> {
@@ -70,5 +94,30 @@ export const patientsService = {
       });
     }
     return apiClient.get<PatientDetail>(`/doctor/patients/${patientId}`);
+  },
+
+  async createPatient(payload: CreatePatientPayload, doctorId?: string): Promise<PatientRosterRow> {
+    if (USE_MOCKS) {
+      await mockDelay(undefined, 300);
+      return createPatientMock(payload, doctorId);
+    }
+    return apiClient.post<PatientRosterRow>("/doctor/patients", { ...payload, doctorId });
+  },
+
+  async updatePatient(patientId: string, updates: UpdatePatientPayload): Promise<PatientProfile> {
+    if (USE_MOCKS) {
+      await mockDelay(undefined, 300);
+      return updatePatientMock(patientId, updates);
+    }
+    return apiClient.patch<PatientProfile>(`/doctor/patients/${patientId}`, updates);
+  },
+
+  async deletePatient(patientId: string): Promise<void> {
+    if (USE_MOCKS) {
+      await mockDelay(undefined, 250);
+      deletePatientMock(patientId);
+      return;
+    }
+    return apiClient.delete<void>(`/doctor/patients/${patientId}`);
   },
 };

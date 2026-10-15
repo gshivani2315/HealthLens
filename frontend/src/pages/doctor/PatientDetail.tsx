@@ -1,13 +1,16 @@
-import { useEffect, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { FormEvent, useEffect, useState } from "react";
+import { Link, useNavigate, useParams } from "react-router-dom";
+import { useToast } from "@/context/ToastContext";
 import { patientsService } from "@/services/patientsService";
-import { PatientDetail as PatientDetailType, TrendRange } from "@/types";
+import { PatientDetail as PatientDetailType, RiskStatus, TrendRange, UpdatePatientPayload } from "@/types";
 import Card, { CardHeader } from "@/components/ui/Card";
 import Badge from "@/components/ui/Badge";
+import Button from "@/components/ui/Button";
+import Modal from "@/components/ui/Modal";
 import Spinner from "@/components/ui/Spinner";
 import BPChart from "@/components/charts/BPChart";
 import GlucoseChart from "@/components/charts/GlucoseChart";
-import { cx, formatDate, formatDateTime, timeAgo } from "@/lib/utils";
+import { cx, formatDateTime, timeAgo } from "@/lib/utils";
 
 const ranges: { value: TrendRange; label: string }[] = [
   { value: "7d", label: "7D" },
@@ -17,14 +20,112 @@ const ranges: { value: TrendRange; label: string }[] = [
 
 export default function PatientDetail() {
   const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
+  const { showToast } = useToast();
+
   const [detail, setDetail] = useState<PatientDetailType | null>(null);
   const [range, setRange] = useState<TrendRange>("30d");
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
+  // Modals
+  const [isEditOpen, setIsEditOpen] = useState(false);
+  const [isDeleteOpen, setIsDeleteOpen] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+
+  // Edit form state
+  const [editName, setEditName] = useState("");
+  const [editEmail, setEditEmail] = useState("");
+  const [editPhone, setEditPhone] = useState("");
+  const [editDateOfBirth, setEditDateOfBirth] = useState("");
+  const [editGender, setEditGender] = useState("Male");
+  const [editConditions, setEditConditions] = useState("");
+  const [editRiskStatus, setEditRiskStatus] = useState<RiskStatus>("normal");
+
+  function loadDetail() {
     if (!id) return;
-    patientsService.getPatientDetail(id).then(setDetail).finally(() => setLoading(false));
+    patientsService
+      .getPatientDetail(id)
+      .then(setDetail)
+      .finally(() => setLoading(false));
+  }
+
+  useEffect(() => {
+    loadDetail();
   }, [id]);
+
+  function openEditModal() {
+    if (!detail) return;
+    setEditName(detail.profile.name);
+    setEditEmail(detail.profile.email);
+    setEditPhone(detail.profile.phone);
+    setEditDateOfBirth(detail.profile.dateOfBirth);
+    setEditGender(detail.profile.gender);
+    setEditConditions(detail.profile.conditions.map((c) => c.label).join(", "));
+    setEditRiskStatus(detail.riskStatus);
+    setFormError(null);
+    setIsEditOpen(true);
+  }
+
+  async function handleEditSubmit(e: FormEvent) {
+    e.preventDefault();
+    if (!id) return;
+    setFormError(null);
+
+    if (!editName.trim() || !editEmail.trim() || !editPhone.trim()) {
+      setFormError("Please fill in all required fields.");
+      return;
+    }
+
+    const conditions = editConditions
+      .split(",")
+      .map((c) => c.trim())
+      .filter(Boolean);
+
+    const updates: UpdatePatientPayload = {
+      name: editName.trim(),
+      email: editEmail.trim(),
+      phone: editPhone.trim(),
+      dateOfBirth: editDateOfBirth,
+      gender: editGender,
+      conditions: conditions.length > 0 ? conditions : ["General Monitoring"],
+      riskStatus: editRiskStatus,
+    };
+
+    setIsSubmitting(true);
+    try {
+      const updatedProfile = await patientsService.updatePatient(id, updates);
+      setDetail((prev) =>
+        prev
+          ? {
+              ...prev,
+              profile: updatedProfile,
+              riskStatus: editRiskStatus,
+            }
+          : prev
+      );
+      showToast("Patient profile updated successfully.", "success");
+      setIsEditOpen(false);
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : "Failed to update profile");
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
+  async function handleDeleteSubmit() {
+    if (!id) return;
+    setIsSubmitting(true);
+    try {
+      await patientsService.deletePatient(id);
+      showToast(`Patient removed from care roster.`, "info");
+      navigate("/doctor/dashboard");
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Failed to remove patient", "error");
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
 
   if (loading || !detail) {
     return (
@@ -36,29 +137,66 @@ export default function PatientDetail() {
 
   const { profile, riskStatus, aiClinicalInsight, alertHistory, vitalsLog } = detail;
   const days = range === "7d" ? 7 : range === "30d" ? 30 : 90;
-  const points = vitalsLog.slice(0, days).slice().reverse();
+  const points = vitalsLog
+    .slice(0, days)
+    .reverse()
+    .map((v) => ({
+      date: v.recordedAt,
+      systolic: v.systolic,
+      diastolic: v.diastolic,
+      glucose: v.glucose,
+      weightKg: v.weightKg,
+      sleepHours: v.sleepHours,
+    }));
 
   return (
     <div className="mx-auto max-w-6xl space-y-6">
+      {/* Patient Header Card */}
       <Card className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-4">
           <div className="flex h-14 w-14 items-center justify-center rounded-full bg-ink-100 text-lg font-semibold text-ink-600">
-            {profile.name.split(" ").map((p) => p[0]).slice(0, 2).join("")}
+            {profile.name
+              .split(" ")
+              .map((p) => p[0])
+              .slice(0, 2)
+              .join("")}
           </div>
           <div>
-            <h1 className="font-display text-lg font-semibold text-ink">{profile.name}</h1>
-            <p className="text-sm text-ink-400">
+            <div className="flex items-center gap-2.5">
+              <h1 className="font-display text-xl font-semibold text-ink">{profile.name}</h1>
+              <Badge tone={riskStatus}>{riskStatus}</Badge>
+            </div>
+            <p className="mt-0.5 text-sm text-ink-400">
               {profile.age} yrs · {profile.gender} · {profile.conditions.map((c) => c.label).join(", ")}
             </p>
+            <p className="text-xs text-ink-400">
+              Assigned Physician: <span className="font-medium text-ink-600">{profile.doctor?.name ?? "Dr. Elena Ruiz"}</span>
+              {profile.doctor?.clinicName && ` (${profile.doctor.clinicName})`}
+            </p>
           </div>
-          <Badge tone={riskStatus}>{riskStatus}</Badge>
         </div>
-        <Link
-          to={`/doctor/patients/${profile.id}/thresholds`}
-          className="rounded border border-line bg-white px-3 py-2 text-sm font-medium text-ink-600 hover:border-ink-300"
-        >
-          Adjust thresholds
-        </Link>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={openEditModal}
+            className="rounded-lg border border-line bg-white px-3 py-2 text-xs font-semibold text-ink-600 shadow-sm hover:border-ink-400 hover:text-ink"
+          >
+            Edit Profile
+          </button>
+          <Link
+            to={`/doctor/patients/${profile.id}/thresholds`}
+            className="rounded-lg border border-line bg-white px-3 py-2 text-xs font-semibold text-ink-600 shadow-sm hover:border-ink-400 hover:text-ink"
+          >
+            Adjust thresholds
+          </Link>
+          <button
+            type="button"
+            onClick={() => setIsDeleteOpen(true)}
+            className="rounded-lg border border-line bg-white px-3 py-2 text-xs font-semibold text-brick-600 shadow-sm hover:border-brick-300 hover:bg-brick-50"
+          >
+            Remove Patient
+          </button>
+        </div>
       </Card>
 
       <div className="grid gap-6 lg:grid-cols-3">
@@ -147,6 +285,123 @@ export default function PatientDetail() {
           </Card>
         </div>
       </div>
+
+      {/* EDIT PROFILE MODAL */}
+      <Modal open={isEditOpen} onClose={() => setIsEditOpen(false)} title={`Edit Patient: ${profile.name}`}>
+        <form onSubmit={handleEditSubmit} className="space-y-4">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-ink">Full Name *</label>
+              <input
+                type="text"
+                required
+                value={editName}
+                onChange={(e) => setEditName(e.target.value)}
+                className="w-full rounded border border-line px-3 py-2 text-sm text-ink focus:border-teal-400 focus:outline-none"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-ink">Email *</label>
+              <input
+                type="email"
+                required
+                value={editEmail}
+                onChange={(e) => setEditEmail(e.target.value)}
+                className="w-full rounded border border-line px-3 py-2 text-sm text-ink focus:border-teal-400 focus:outline-none"
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-ink">Phone *</label>
+              <input
+                type="tel"
+                required
+                value={editPhone}
+                onChange={(e) => setEditPhone(e.target.value)}
+                className="w-full rounded border border-line px-3 py-2 text-sm text-ink focus:border-teal-400 focus:outline-none"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-ink">Date of Birth</label>
+              <input
+                type="date"
+                value={editDateOfBirth}
+                onChange={(e) => setEditDateOfBirth(e.target.value)}
+                className="w-full rounded border border-line px-3 py-2 text-sm text-ink focus:border-teal-400 focus:outline-none"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-ink">Gender</label>
+              <select
+                value={editGender}
+                onChange={(e) => setEditGender(e.target.value)}
+                className="w-full rounded border border-line px-3 py-2 text-sm text-ink focus:border-teal-400 focus:outline-none"
+              >
+                <option value="Male">Male</option>
+                <option value="Female">Female</option>
+                <option value="Other">Other</option>
+                <option value="Prefer not to say">Prefer not to say</option>
+              </select>
+            </div>
+          </div>
+
+          <div>
+            <label className="mb-1 block text-xs font-semibold text-ink">Conditions (comma-separated)</label>
+            <input
+              type="text"
+              value={editConditions}
+              onChange={(e) => setEditConditions(e.target.value)}
+              className="w-full rounded border border-line px-3 py-2 text-sm text-ink focus:border-teal-400 focus:outline-none"
+            />
+          </div>
+
+          <div>
+            <label className="mb-1 block text-xs font-semibold text-ink">Clinical Risk Assessment</label>
+            <select
+              value={editRiskStatus}
+              onChange={(e) => setEditRiskStatus(e.target.value as RiskStatus)}
+              className="w-full rounded border border-line px-3 py-2 text-sm text-ink focus:border-teal-400 focus:outline-none"
+            >
+              <option value="normal">Normal</option>
+              <option value="moderate">Moderate</option>
+              <option value="critical">Critical</option>
+            </select>
+          </div>
+
+          {formError && <p className="text-sm text-brick-600">{formError}</p>}
+
+          <div className="flex justify-end gap-2 pt-2">
+            <Button type="button" variant="secondary" onClick={() => setIsEditOpen(false)}>
+              Cancel
+            </Button>
+            <Button type="submit" isLoading={isSubmitting}>
+              Save Profile Changes
+            </Button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* DELETE MODAL */}
+      <Modal open={isDeleteOpen} onClose={() => setIsDeleteOpen(false)} title="Remove Patient from Care">
+        <div className="space-y-4">
+          <p className="text-sm text-ink">
+            Are you sure you want to remove <span className="font-semibold text-ink">{profile.name}</span> from your care roster?
+          </p>
+          <p className="text-xs text-ink-400">
+            This will unassign the patient from your clinical supervision and remove them from active monitoring.
+          </p>
+          <div className="flex justify-end gap-2 pt-3">
+            <Button variant="secondary" onClick={() => setIsDeleteOpen(false)}>
+              Cancel
+            </Button>
+            <Button variant="danger" isLoading={isSubmitting} onClick={handleDeleteSubmit}>
+              Remove Patient
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }

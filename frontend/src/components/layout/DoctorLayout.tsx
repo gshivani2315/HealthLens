@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Outlet, useNavigate } from "react-router-dom";
+import { useAuth } from "@/context/AuthContext";
 import Sidebar, { NavItem } from "./Sidebar";
 import BottomTabBar from "./BottomTabBar";
 import NotificationBell from "./NotificationBell";
@@ -13,13 +14,14 @@ const navItems: NavItem[] = [
 ];
 
 export default function DoctorLayout() {
+  const { user } = useAuth();
   const [alerts, setAlerts] = useState<AlertItem[]>([]);
   const [search, setSearch] = useState("");
   const navigate = useNavigate();
 
   useEffect(() => {
-    patientsService.getDoctorOverview().then((o) => setAlerts(o.urgentAlerts)).catch(() => setAlerts([]));
-  }, []);
+    patientsService.getDoctorOverview(user?.id).then((o) => setAlerts(o.urgentAlerts)).catch(() => setAlerts([]));
+  }, [user?.id]);
 
   const withBadge = navItems.map((n) =>
     n.to === "/doctor/alerts" ? { ...n, badge: alerts.filter((a) => a.status === "unread").length || undefined } : n

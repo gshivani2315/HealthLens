@@ -1,6 +1,6 @@
 import { prisma } from '../../db';
 import { Router } from 'express';
-import { login } from './auth.service';
+import { login, registerDoctor } from './auth.service';
 import { requireAuth } from '../../middleware/auth';
 
 const router = Router();
@@ -20,6 +20,46 @@ router.post('/login', async (req, res, next) => {
 
     res.json(result);
   } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/register-doctor', async (req, res, next) => {
+  try {
+    const { name, email, password, clinicName, phone } = req.body ?? {};
+    if (!name || !email || !password || !clinicName) {
+      return res.status(400).json({ message: 'Name, email, password, and clinic name are required' });
+    }
+
+    const result = await registerDoctor({ name, email, password, clinicName, phone });
+    res.status(201).json(result);
+  } catch (err: any) {
+    if (err.message?.includes('already exists')) {
+      return res.status(409).json({ message: err.message });
+    }
+    next(err);
+  }
+});
+
+router.post('/register', async (req, res, next) => {
+  try {
+    const { name, email, password, clinicName, phone } = req.body ?? {};
+    if (!name || !email || !password) {
+      return res.status(400).json({ message: 'Name, email, and password are required' });
+    }
+
+    const result = await registerDoctor({
+      name,
+      email,
+      password,
+      clinicName: clinicName || 'HealthLens Clinic',
+      phone,
+    });
+    res.status(201).json(result);
+  } catch (err: any) {
+    if (err.message?.includes('already exists')) {
+      return res.status(409).json({ message: err.message });
+    }
     next(err);
   }
 });

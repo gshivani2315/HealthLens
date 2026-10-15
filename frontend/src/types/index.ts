@@ -18,6 +18,14 @@ export interface LoginPayload {
   password: string;
 }
 
+export interface DoctorRegisterPayload {
+  name: string;
+  email: string;
+  password: string;
+  clinicName: string;
+  phone?: string;
+}
+
 export interface AuthResponse {
   token: string;
   user: AuthUser;
@@ -53,18 +61,49 @@ export interface PatientProfile {
   email: string;
   conditions: ChronicCondition[];
   doctor: Doctor;
+  doctorId?: string;
 }
 
 export interface PatientRosterRow {
   id: string;
+  doctorId?: string;
   name: string;
+  email?: string;
+  phone?: string;
+  dateOfBirth?: string;
   age: number;
   gender: string;
   primaryCondition: string;
+  conditions?: ChronicCondition[];
   latestBloodPressure: { systolic: number; diastolic: number } | null;
   latestGlucose: number | null;
   riskStatus: RiskStatus;
   lastReadingAt: string | null; // ISO datetime
+}
+
+export interface CreatePatientPayload {
+  name: string;
+  email: string;
+  phone: string;
+  dateOfBirth: string; // YYYY-MM-DD
+  gender: string;
+  conditions: string[];
+  riskStatus?: RiskStatus;
+  initialSystolic?: number;
+  initialDiastolic?: number;
+  initialGlucose?: number;
+  initialWeightKg?: number;
+  initialSleepHours?: number;
+}
+
+export interface UpdatePatientPayload {
+  name?: string;
+  email?: string;
+  phone?: string;
+  dateOfBirth?: string;
+  gender?: string;
+  conditions?: string[];
+  riskStatus?: RiskStatus;
 }
 
 export interface VitalsEntry {

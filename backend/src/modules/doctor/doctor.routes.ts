@@ -35,9 +35,16 @@ function toLowerType(type: string): 'threshold' | 'ai_pattern' {
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /doctor/overview
 // ─────────────────────────────────────────────────────────────────────────────
-router.get('/overview', requireAuth, async (_req, res, next) => {
+router.get('/overview', requireAuth, async (req, res, next) => {
   try {
+    const doctor = await prisma.doctor.findFirst({
+      where: { OR: [{ userId: req.user!.sub }, { id: req.user!.sub }] },
+    });
+
+    const wherePatient = doctor ? { doctorId: doctor.id } : {};
+
     const patients = await prisma.patient.findMany({
+      where: wherePatient,
       include: {
         user: true,
         conditions: true,
@@ -49,7 +56,10 @@ router.get('/overview', requireAuth, async (_req, res, next) => {
     });
 
     const urgentAlerts = await prisma.alert.findMany({
-      where: { status: 'UNREAD' },
+      where: {
+        status: 'UNREAD',
+        ...(doctor ? { patient: { doctorId: doctor.id } } : {}),
+      },
       include: { patient: { include: { user: true } } },
       orderBy: { triggeredAt: 'desc' },
     });
@@ -70,10 +80,15 @@ router.get('/overview', requireAuth, async (_req, res, next) => {
 
       return {
         id: p.id,
+        doctorId: p.doctorId ?? undefined,
         name: p.user.name,
+        email: p.user.email,
+        phone: p.phone ?? undefined,
+        dateOfBirth: p.dateOfBirth ? p.dateOfBirth.toISOString().slice(0, 10) : undefined,
         age,
         gender: p.gender ?? 'Unknown',
         primaryCondition: p.conditions[0]?.label ?? 'General Monitoring',
+        conditions: p.conditions.map((c) => ({ id: c.id, label: c.label })),
         latestBloodPressure: latest?.systolic && latest?.diastolic
           ? { systolic: latest.systolic, diastolic: latest.diastolic }
           : null,
@@ -113,7 +128,11 @@ router.get('/patients', requireAuth, async (req, res, next) => {
     const search = (req.query.search as string) || '';
     const filter = (req.query.filter as string) || 'all';
 
-    const where: any = {};
+    const doctor = await prisma.doctor.findFirst({
+      where: { OR: [{ userId: req.user!.sub }, { id: req.user!.sub }] },
+    });
+
+    const where: any = doctor ? { doctorId: doctor.id } : {};
     if (search) {
       where.user = { name: { contains: search, mode: 'insensitive' } };
     }
@@ -143,10 +162,15 @@ router.get('/patients', requireAuth, async (req, res, next) => {
 
       return {
         id: p.id,
+        doctorId: p.doctorId ?? undefined,
         name: p.user.name,
+        email: p.user.email,
+        phone: p.phone ?? undefined,
+        dateOfBirth: p.dateOfBirth ? p.dateOfBirth.toISOString().slice(0, 10) : undefined,
         age,
         gender: p.gender ?? 'Unknown',
         primaryCondition: p.conditions[0]?.label ?? 'General Monitoring',
+        conditions: p.conditions.map((c) => ({ id: c.id, label: c.label })),
         latestBloodPressure: latest?.systolic && latest?.diastolic
           ? { systolic: latest.systolic, diastolic: latest.diastolic }
           : null,
@@ -157,6 +181,224 @@ router.get('/patients', requireAuth, async (req, res, next) => {
     });
 
     res.json(roster);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /doctor/patients (Add new patient linked to currently authenticated doctor)
+// ─────────────────────────────────────────────────────────────────────────────
+router.post('/patients', requireAuth, async (req, res, next) => {
+  try {
+    const doctor = await prisma.doctor.findFirst({
+      where: { OR: [{ userId: req.user!.sub }, { id: req.user!.sub }] },
+    });
+
+    const {
+      name,
+      email,
+      phone,
+      dateOfBirth,
+      gender,
+      conditions,
+      riskStatus,
+      initialSystolic,
+      initialDiastolic,
+      initialGlucose,
+      initialWeightKg,
+      initialSleepHours,
+    } = req.body ?? {};
+
+    if (!name || !email) {
+      return res.status(400).json({ message: 'Name and email are required' });
+    }
+
+    let user = await prisma.user.findUnique({ where: { email } });
+    if (!user) {
+      user = await prisma.user.create({
+        data: {
+          name,
+          email,
+          password: 'temp_patient_password',
+          role: 'PATIENT',
+        },
+      });
+    }
+
+    const patient = await prisma.patient.create({
+      data: {
+        userId: user.id,
+        doctorId: doctor?.id,
+        doctorAssignedAt: new Date(),
+        dateOfBirth: dateOfBirth ? new Date(dateOfBirth) : undefined,
+        gender: gender || 'Other',
+        phone,
+        riskStatus:
+          riskStatus?.toUpperCase() === 'CRITICAL'
+            ? 'CRITICAL'
+            : riskStatus?.toUpperCase() === 'MODERATE'
+            ? 'MODERATE'
+            : 'NORMAL',
+        conditions: {
+          create: (conditions && conditions.length > 0 ? conditions : ['General Monitoring']).map(
+            (label: string) => ({ label })
+          ),
+        },
+        threshold: {
+          create: {
+            systolicMax: 160,
+            diastolicMax: 100,
+            glucoseFastingMax: 130,
+            glucoseFastingMin: 70,
+            glucosePostMealMax: 180,
+            weightDeltaKg: 2,
+            weightDeltaDays: 7,
+          },
+        },
+      },
+      include: {
+        user: true,
+        conditions: true,
+      },
+    });
+
+    if (initialSystolic || initialGlucose || initialWeightKg) {
+      await prisma.vital.create({
+        data: {
+          patientId: patient.id,
+          systolic: initialSystolic,
+          diastolic: initialDiastolic,
+          glucose: initialGlucose,
+          weightKg: initialWeightKg,
+          sleepHours: initialSleepHours,
+          recordedAt: new Date(),
+        },
+      });
+      await prisma.patient.update({
+        where: { id: patient.id },
+        data: { lastReadingAt: new Date() },
+      });
+    }
+
+    const now = Date.now();
+    const birthDate = patient.dateOfBirth ? new Date(patient.dateOfBirth) : new Date('1970-01-01');
+    const age = Math.abs(new Date(now - birthDate.getTime()).getUTCFullYear() - 1970);
+
+    res.status(201).json({
+      id: patient.id,
+      doctorId: patient.doctorId ?? undefined,
+      name: patient.user.name,
+      email: patient.user.email,
+      phone: patient.phone ?? undefined,
+      dateOfBirth: patient.dateOfBirth ? patient.dateOfBirth.toISOString().slice(0, 10) : undefined,
+      age,
+      gender: patient.gender ?? 'Unknown',
+      primaryCondition: patient.conditions[0]?.label ?? 'General Monitoring',
+      conditions: patient.conditions.map((c) => ({ id: c.id, label: c.label })),
+      latestBloodPressure:
+        initialSystolic && initialDiastolic
+          ? { systolic: initialSystolic, diastolic: initialDiastolic }
+          : null,
+      latestGlucose: initialGlucose ?? null,
+      riskStatus: toLowerRisk(patient.riskStatus),
+      lastReadingAt: new Date().toISOString(),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PATCH /doctor/patients/:id (Update patient details)
+// ─────────────────────────────────────────────────────────────────────────────
+router.patch('/patients/:id', requireAuth, async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { name, email, phone, gender, dateOfBirth, riskStatus, conditions } = req.body ?? {};
+
+    const patient = await prisma.patient.findFirst({
+      where: { OR: [{ id }, { userId: id }] },
+      include: { user: true, conditions: true, doctor: { include: { user: true } } },
+    });
+
+    if (!patient) return res.status(404).json({ message: 'Patient not found' });
+
+    if (name || email) {
+      await prisma.user.update({
+        where: { id: patient.userId },
+        data: {
+          ...(name ? { name } : {}),
+          ...(email ? { email } : {}),
+        },
+      });
+    }
+
+    if (conditions && Array.isArray(conditions)) {
+      await prisma.chronicCondition.deleteMany({ where: { patientId: patient.id } });
+      await prisma.chronicCondition.createMany({
+        data: conditions.map((label: string) => ({ patientId: patient.id, label })),
+      });
+    }
+
+    const updated = await prisma.patient.update({
+      where: { id: patient.id },
+      data: {
+        ...(phone !== undefined ? { phone } : {}),
+        ...(gender !== undefined ? { gender } : {}),
+        ...(dateOfBirth ? { dateOfBirth: new Date(dateOfBirth) } : {}),
+        ...(riskStatus ? { riskStatus: riskStatus.toUpperCase() } : {}),
+      },
+      include: {
+        user: true,
+        conditions: true,
+        doctor: { include: { user: true } },
+      },
+    });
+
+    const birthDate = updated.dateOfBirth ? new Date(updated.dateOfBirth) : new Date('1970-01-01');
+    const age = Math.abs(new Date(Date.now() - birthDate.getTime()).getUTCFullYear() - 1970);
+
+    res.json({
+      id: updated.id,
+      name: updated.user.name,
+      dateOfBirth: updated.dateOfBirth ? updated.dateOfBirth.toISOString().slice(0, 10) : '1970-01-01',
+      age,
+      gender: updated.gender ?? 'Unknown',
+      phone: updated.phone ?? '',
+      email: updated.user.email,
+      conditions: updated.conditions.map((c) => ({ id: c.id, label: c.label })),
+      doctor: {
+        id: updated.doctor?.id ?? 'doc_default',
+        name: updated.doctor?.user?.name ?? 'Assigned Physician',
+        clinicName: updated.doctor?.clinicName ?? 'Meridian Family Health',
+        email: updated.doctor?.user?.email ?? 'doctor@healthlens.demo',
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DELETE /doctor/patients/:id (Remove/unassign patient from doctor's roster)
+// ─────────────────────────────────────────────────────────────────────────────
+router.delete('/patients/:id', requireAuth, async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const patient = await prisma.patient.findFirst({
+      where: { OR: [{ id }, { userId: id }] },
+    });
+
+    if (!patient) return res.status(404).json({ message: 'Patient not found' });
+
+    // Unassign patient from this doctor
+    await prisma.patient.update({
+      where: { id: patient.id },
+      data: { doctorId: null, doctorAssignedAt: null },
+    });
+
+    res.status(204).send();
   } catch (err) {
     next(err);
   }
@@ -204,6 +446,7 @@ router.get('/patients/:id', requireAuth, async (req, res, next) => {
     res.json({
       profile: {
         id: patient.id,
+        doctorId: patient.doctorId ?? undefined,
         name: patient.user.name,
         dateOfBirth: patient.dateOfBirth ? patient.dateOfBirth.toISOString().slice(0, 10) : '1970-01-01',
         age,
@@ -333,4 +576,3 @@ router.put('/patients/:id/thresholds', requireAuth, async (req, res, next) => {
 });
 
 export default router;
-

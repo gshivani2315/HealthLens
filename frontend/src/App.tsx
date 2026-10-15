@@ -29,6 +29,8 @@ export default function App() {
         <Routes>
           <Route path="/" element={<RootRedirect />} />
           <Route path="/login" element={<LoginPage />} />
+          <Route path="/register" element={<LoginPage defaultMode="register" />} />
+          <Route path="/register/doctor" element={<LoginPage defaultMode="register" />} />
 
           <Route element={<ProtectedRoute role="patient" />}>
             <Route element={<PatientLayout />}>
