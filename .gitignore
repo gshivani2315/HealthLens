@@ -2,6 +2,8 @@
 *.env
 ###
 
+collections/
+
 # Logs
 logs
 *.log
