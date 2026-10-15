@@ -1,12 +1,17 @@
-import express from "express";
+import { createApp } from './app';
+import { config } from './config';
+import { prisma } from './db';
 
-const app = express();
-const PORT = 3000;
+const app = createApp();
 
-app.get("/", (req, res) => {
-  res.send("HealthLens API");
+const server = app.listen(config.port, () => {
+  console.log(`HealthLens API listening on http://localhost:${config.port}`);
 });
 
-app.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
-});
+async function shutdown() {
+  server.close();
+  await prisma.$disconnect();
+  process.exit(0);
+}
+process.on('SIGINT', shutdown);
+process.on('SIGTERM', shutdown);
