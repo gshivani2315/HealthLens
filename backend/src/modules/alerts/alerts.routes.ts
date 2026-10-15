@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { prisma } from '../../db';
-import { requireAuth } from '../../middleware/auth';
+import { requireAuth, requireRole } from '../../middleware/auth';
 import { AlertStatus, AlertType } from '@prisma/client';
 
 const router = Router();
@@ -28,12 +28,26 @@ function toLowerType(type: string): 'threshold' | 'ai_pattern' {
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /alerts?status=&type=
 // ─────────────────────────────────────────────────────────────────────────────
-router.get('/', requireAuth, async (req, res, next) => {
+router.get('/', requireAuth, requireRole('DOCTOR'), async (req, res, next) => {
   try {
     const statusQuery = (req.query.status as string) || '';
     const typeQuery = (req.query.type as string) || '';
 
+    const doctor = await prisma.doctor.findFirst({
+      where: {
+        OR: [
+          { userId: req.user!.sub },
+          { userId: req.user!.dbUserId },
+          { id: req.user!.sub },
+        ],
+      },
+    });
+
     const where: any = {};
+
+    if (doctor) {
+      where.patient = { doctorId: doctor.id };
+    }
 
     if (statusQuery && statusQuery !== 'all') {
       const s = statusQuery.toUpperCase();
@@ -80,10 +94,20 @@ router.get('/', requireAuth, async (req, res, next) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // PATCH /alerts/:id
 // ─────────────────────────────────────────────────────────────────────────────
-router.patch('/:id', requireAuth, async (req, res, next) => {
+router.patch('/:id', requireAuth, requireRole('DOCTOR'), async (req, res, next) => {
   try {
     const { id } = req.params;
     const { status, clinicalNote } = req.body ?? {};
+
+    const doctor = await prisma.doctor.findFirst({
+      where: {
+        OR: [
+          { userId: req.user!.sub },
+          { userId: req.user!.dbUserId },
+          { id: req.user!.sub },
+        ],
+      },
+    });
 
     let alertStatus: AlertStatus | undefined;
     if (status) {
@@ -97,7 +121,12 @@ router.patch('/:id', requireAuth, async (req, res, next) => {
       where: { id },
       data: {
         ...(alertStatus ? { status: alertStatus } : {}),
-        ...(alertStatus === AlertStatus.ACKNOWLEDGED ? { acknowledgedAt: new Date() } : {}),
+        ...(alertStatus === AlertStatus.ACKNOWLEDGED
+          ? {
+              acknowledgedAt: new Date(),
+              ...(doctor ? { acknowledgedById: doctor.id } : {}),
+            }
+          : {}),
         ...(alertStatus === AlertStatus.RESOLVED ? { resolvedAt: new Date() } : {}),
         ...(clinicalNote !== undefined ? { clinicalNote } : {}),
       },
@@ -128,7 +157,7 @@ router.patch('/:id', requireAuth, async (req, res, next) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // POST /alerts/:id/follow-up
 // ─────────────────────────────────────────────────────────────────────────────
-router.post('/:id/follow-up', requireAuth, async (req, res, next) => {
+router.post('/:id/follow-up', requireAuth, requireRole('DOCTOR'), async (req, res, next) => {
   try {
     const { id } = req.params;
 
@@ -150,4 +179,3 @@ router.post('/:id/follow-up', requireAuth, async (req, res, next) => {
 });
 
 export default router;
-

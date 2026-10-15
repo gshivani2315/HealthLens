@@ -65,15 +65,28 @@ router.post('/register', async (req, res, next) => {
 });
 
 router.post('/logout', (_req, res) => {
-  // JWTs are stateless, so the frontend deletes its token.
   res.json({ message: 'Logged out' });
 });
 
 router.get('/me', requireAuth, async (req, res, next) => {
   try {
-    const user = await prisma.user.findUnique({ where: { id: req.user!.sub } });
+    const user = await prisma.user.findFirst({
+      where: {
+        OR: [
+          { id: req.user!.sub },
+          { id: req.user!.dbUserId },
+          ...(req.user!.email ? [{ email: req.user!.email }] : []),
+        ],
+      },
+    });
+
     if (!user) return res.status(404).json({ message: 'User not found' });
-    res.json({ id: user.id, email: user.email, name: user.name, role: user.role });
+    res.json({
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      role: user.role.toLowerCase() as 'patient' | 'doctor',
+    });
   } catch (err) {
     next(err);
   }

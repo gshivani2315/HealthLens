@@ -8,6 +8,9 @@ function required(name: string): string {
 
 export const config = {
   port: Number(process.env.PORT ?? 4000),
-  jwtSecret: required('JWT_SECRET'),
+  jwtSecret: process.env.JWT_SECRET || process.env.SUPABASE_JWT_SECRET || 'healthlens-dev-secret-key-change-in-production',
+  supabaseJwtSecret: process.env.SUPABASE_JWT_SECRET,
+  supabaseUrl: process.env.SUPABASE_URL,
+  supabaseServiceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY,
   kafkaBroker: process.env.KAFKA_BROKER ?? 'localhost:9092',
 };

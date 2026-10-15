@@ -46,38 +46,97 @@ function computeStats(values: number[], unit: string) {
   };
 }
 
+// Helper to resolve patient by id or userId with authorization
+async function resolvePatientWithAuth(patientIdentifier: string, authUser: any) {
+  // If 'me', lookup via auth user id
+  if (patientIdentifier === 'me') {
+    return prisma.patient.findFirst({
+      where: {
+        OR: [
+          { userId: authUser.sub },
+          { userId: authUser.dbUserId },
+          { id: authUser.sub },
+        ],
+      },
+      include: {
+        user: true,
+        conditions: true,
+        doctor: { include: { user: true } },
+        insight: true,
+      },
+    });
+  }
+
+  // Lookup by patient.id or patient.userId
+  const patient = await prisma.patient.findFirst({
+    where: {
+      OR: [
+        { id: patientIdentifier },
+        { userId: patientIdentifier },
+      ],
+    },
+    include: {
+      user: true,
+      conditions: true,
+      doctor: { include: { user: true } },
+      insight: true,
+    },
+  });
+
+  if (!patient) return null;
+
+  // Authorization check:
+  // Allowed if:
+  // 1. User is the patient
+  // 2. User is a doctor assigned to this patient
+  const isOwnPatient =
+    authUser.sub === patient.userId ||
+    authUser.dbUserId === patient.userId ||
+    authUser.sub === patient.id;
+
+  if (isOwnPatient) return patient;
+
+  if (authUser.role === 'DOCTOR') {
+    // Check if doctor matches
+    const doctor = await prisma.doctor.findFirst({
+      where: {
+        OR: [
+          { id: authUser.sub },
+          { userId: authUser.sub },
+          { userId: authUser.dbUserId },
+        ],
+      },
+    });
+    if (doctor && patient.doctorId === doctor.id) {
+      return patient;
+    }
+  }
+
+  return 'FORBIDDEN';
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /patients/:id/profile
 // ─────────────────────────────────────────────────────────────────────────────
 router.get('/:id/profile', requireAuth, async (req, res, next) => {
   try {
-    const { id } = req.params;
+    const patientResult = await resolvePatientWithAuth(req.params.id, req.user);
 
-    // Find patient by id or userId
-    const patient = await prisma.patient.findFirst({
-      where: { OR: [{ id }, { userId: id }] },
-      include: {
-        user: true,
-        conditions: true,
-        doctor: {
-          include: { user: true },
-        },
-      },
-    });
-
-    if (!patient) {
+    if (patientResult === 'FORBIDDEN') {
+      return res.status(403).json({ message: 'Forbidden: access to this patient profile denied' });
+    }
+    if (!patientResult) {
       return res.status(404).json({ message: 'Patient not found' });
     }
 
+    const patient = patientResult;
     const birthDate = patient.dateOfBirth ? new Date(patient.dateOfBirth) : new Date('1970-01-01');
-    const ageDiff = Date.now() - birthDate.getTime();
-    const ageDate = new Date(ageDiff);
-    const age = Math.abs(ageDate.getUTCFullYear() - 1970);
+    const age = Math.abs(new Date(Date.now() - birthDate.getTime()).getUTCFullYear() - 1970);
 
     const docUser = patient.doctor?.user;
     const docObj = {
-      id: patient.doctor?.id ?? 'doc_default',
-      name: docUser?.name ?? 'Assigned Physician',
+      id: patient.doctor?.id ?? 'doc_001',
+      name: docUser?.name ?? 'Dr. Elena Ruiz',
       clinicName: patient.doctor?.clinicName ?? 'Meridian Family Health',
       phone: patient.doctor?.phone ?? undefined,
       email: docUser?.email ?? 'doctor@healthlens.demo',
@@ -105,17 +164,17 @@ router.get('/:id/profile', requireAuth, async (req, res, next) => {
 // ─────────────────────────────────────────────────────────────────────────────
 router.patch('/:id/profile', requireAuth, async (req, res, next) => {
   try {
-    const { id } = req.params;
-    const { phone, gender, name } = req.body ?? {};
+    const patientResult = await resolvePatientWithAuth(req.params.id, req.user);
 
-    const patient = await prisma.patient.findFirst({
-      where: { OR: [{ id }, { userId: id }] },
-      include: { user: true },
-    });
-
-    if (!patient) {
+    if (patientResult === 'FORBIDDEN') {
+      return res.status(403).json({ message: 'Forbidden: access to this patient profile denied' });
+    }
+    if (!patientResult) {
       return res.status(404).json({ message: 'Patient not found' });
     }
+
+    const patient = patientResult;
+    const { phone, gender, name } = req.body ?? {};
 
     if (name) {
       await prisma.user.update({
@@ -150,8 +209,8 @@ router.patch('/:id/profile', requireAuth, async (req, res, next) => {
       email: updated.user.email,
       conditions: updated.conditions.map((c) => ({ id: c.id, label: c.label })),
       doctor: {
-        id: updated.doctor?.id ?? 'doc_default',
-        name: updated.doctor?.user?.name ?? 'Assigned Physician',
+        id: updated.doctor?.id ?? 'doc_001',
+        name: updated.doctor?.user?.name ?? 'Dr. Elena Ruiz',
         clinicName: updated.doctor?.clinicName ?? 'Meridian Family Health',
         email: updated.doctor?.user?.email ?? 'doctor@healthlens.demo',
       },
@@ -166,21 +225,18 @@ router.patch('/:id/profile', requireAuth, async (req, res, next) => {
 // ─────────────────────────────────────────────────────────────────────────────
 router.get('/:id/dashboard', requireAuth, async (req, res, next) => {
   try {
-    const { id } = req.params;
-    const patient = await prisma.patient.findFirst({
-      where: { OR: [{ id }, { userId: id }] },
-      include: {
-        user: true,
-        doctor: { include: { user: true } },
-        insight: true,
-      },
-    });
+    const patientResult = await resolvePatientWithAuth(req.params.id, req.user);
 
-    if (!patient) {
+    if (patientResult === 'FORBIDDEN') {
+      return res.status(403).json({ message: 'Forbidden: access to dashboard denied' });
+    }
+    if (!patientResult) {
       return res.status(404).json({ message: 'Patient not found' });
     }
 
-    // Fetch last 14 days of vitals to calculate weekly comparisons
+    const patient = patientResult;
+
+    // Fetch last 14 days of vitals
     const vitals = await prisma.vital.findMany({
       where: { patientId: patient.id },
       orderBy: { recordedAt: 'desc' },
@@ -196,20 +252,17 @@ router.get('/:id/dashboard', requireAuth, async (req, res, next) => {
       return valid.reduce((sum, v) => sum + (Number(v[key]) || 0), 0) / valid.length;
     };
 
-    // Check if logged today
     const now = new Date();
     const isToday = latest
       ? new Date(latest.recordedAt).toDateString() === now.toDateString()
       : false;
 
-    // Recent alerts
     const alerts = await prisma.alert.findMany({
       where: { patientId: patient.id },
       orderBy: { triggeredAt: 'desc' },
       take: 5,
     });
 
-    // 7-day sparkline
     const sparkline = vitals
       .slice(0, 7)
       .reverse()
@@ -223,7 +276,7 @@ router.get('/:id/dashboard', requireAuth, async (req, res, next) => {
     res.json({
       patientName: patient.user.name,
       doctor: {
-        id: patient.doctor?.id ?? 'doc_default',
+        id: patient.doctor?.id ?? 'doc_001',
         name: patient.doctor?.user?.name ?? 'Dr. Elena Ruiz',
         clinicName: patient.doctor?.clinicName ?? 'Meridian Family Health',
         email: patient.doctor?.user?.email ?? 'doctor@healthlens.demo',
@@ -285,16 +338,17 @@ router.get('/:id/dashboard', requireAuth, async (req, res, next) => {
 // ─────────────────────────────────────────────────────────────────────────────
 router.post('/:id/vitals', requireAuth, async (req, res, next) => {
   try {
-    const { id } = req.params;
-    const body = req.body ?? {};
+    const patientResult = await resolvePatientWithAuth(req.params.id, req.user);
 
-    const patient = await prisma.patient.findFirst({
-      where: { OR: [{ id }, { userId: id }] },
-    });
-
-    if (!patient) {
+    if (patientResult === 'FORBIDDEN') {
+      return res.status(403).json({ message: 'Forbidden: cannot log vitals for this patient' });
+    }
+    if (!patientResult) {
       return res.status(404).json({ message: 'Patient not found' });
     }
+
+    const patient = patientResult;
+    const body = req.body ?? {};
 
     const recordedAt = body.recordedAt ? new Date(body.recordedAt) : new Date();
 
@@ -316,13 +370,12 @@ router.post('/:id/vitals', requireAuth, async (req, res, next) => {
       },
     });
 
-    // Update patient's lastReadingAt
     await prisma.patient.update({
       where: { id: patient.id },
       data: { lastReadingAt: recordedAt },
     });
 
-    // Publish Kafka vitals.logged event
+    // Kafka event emission
     await publishVitalLoggedEvent({
       vitalId: vital.id,
       patientId: patient.id,
@@ -350,18 +403,17 @@ router.post('/:id/vitals', requireAuth, async (req, res, next) => {
 // ─────────────────────────────────────────────────────────────────────────────
 router.get('/:id/vitals', requireAuth, async (req, res, next) => {
   try {
-    const { id } = req.params;
-    const range = (req.query.range as string) || '30d';
-    const filter = (req.query.filter as string) || 'all';
+    const patientResult = await resolvePatientWithAuth(req.params.id, req.user);
 
-    const patient = await prisma.patient.findFirst({
-      where: { OR: [{ id }, { userId: id }] },
-    });
-
-    if (!patient) {
+    if (patientResult === 'FORBIDDEN') {
+      return res.status(403).json({ message: 'Forbidden: cannot access vitals' });
+    }
+    if (!patientResult) {
       return res.status(404).json({ message: 'Patient not found' });
     }
 
+    const patient = patientResult;
+    const range = (req.query.range as string) || '30d';
     const days = range === '7d' ? 7 : range === '90d' ? 90 : 30;
     const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
 
@@ -400,17 +452,18 @@ router.get('/:id/vitals', requireAuth, async (req, res, next) => {
 // ─────────────────────────────────────────────────────────────────────────────
 router.get('/:id/vitals/log', requireAuth, async (req, res, next) => {
   try {
-    const { id } = req.params;
-    const page = Math.max(1, Number(req.query.page || 1));
-    const pageSize = Math.max(1, Number(req.query.pageSize || 20));
+    const patientResult = await resolvePatientWithAuth(req.params.id, req.user);
 
-    const patient = await prisma.patient.findFirst({
-      where: { OR: [{ id }, { userId: id }] },
-    });
-
-    if (!patient) {
+    if (patientResult === 'FORBIDDEN') {
+      return res.status(403).json({ message: 'Forbidden: cannot access vitals log' });
+    }
+    if (!patientResult) {
       return res.status(404).json({ message: 'Patient not found' });
     }
+
+    const patient = patientResult;
+    const page = Math.max(1, Number(req.query.page || 1));
+    const pageSize = Math.max(1, Number(req.query.pageSize || 20));
 
     const [entries, total] = await Promise.all([
       prisma.vital.findMany({
@@ -446,15 +499,16 @@ router.get('/:id/vitals/log', requireAuth, async (req, res, next) => {
 // ─────────────────────────────────────────────────────────────────────────────
 router.get('/:id/summaries', requireAuth, async (req, res, next) => {
   try {
-    const { id } = req.params;
-    const patient = await prisma.patient.findFirst({
-      where: { OR: [{ id }, { userId: id }] },
-    });
+    const patientResult = await resolvePatientWithAuth(req.params.id, req.user);
 
-    if (!patient) {
+    if (patientResult === 'FORBIDDEN') {
+      return res.status(403).json({ message: 'Forbidden: cannot access summaries' });
+    }
+    if (!patientResult) {
       return res.status(404).json({ message: 'Patient not found' });
     }
 
+    const patient = patientResult;
     const summaries = await prisma.weeklySummary.findMany({
       where: { patientId: patient.id },
       orderBy: { weekStart: 'desc' },
@@ -481,15 +535,16 @@ router.get('/:id/summaries', requireAuth, async (req, res, next) => {
 // ─────────────────────────────────────────────────────────────────────────────
 router.get('/:id/alerts/history', requireAuth, async (req, res, next) => {
   try {
-    const { id } = req.params;
-    const patient = await prisma.patient.findFirst({
-      where: { OR: [{ id }, { userId: id }] },
-    });
+    const patientResult = await resolvePatientWithAuth(req.params.id, req.user);
 
-    if (!patient) {
+    if (patientResult === 'FORBIDDEN') {
+      return res.status(403).json({ message: 'Forbidden: cannot access alert history' });
+    }
+    if (!patientResult) {
       return res.status(404).json({ message: 'Patient not found' });
     }
 
+    const patient = patientResult;
     const alerts = await prisma.alert.findMany({
       where: { patientId: patient.id },
       orderBy: { triggeredAt: 'desc' },
@@ -514,4 +569,3 @@ router.get('/:id/alerts/history', requireAuth, async (req, res, next) => {
 });
 
 export default router;
-
