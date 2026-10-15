@@ -42,6 +42,49 @@ async function main() {
       dob: '1968-04-12',
       condition: 'Hypertension Stage 1',
       phone: '+1 (555) 402-8871',
+      summaries: [
+        {
+          weekOffset: 0,
+          narrative:
+            "Your blood pressure has remained slightly elevated this week, averaging 148/94. Sleep improved by about 1 hour compared to last week — that's a good sign for the days ahead.",
+          takeaways: [
+            'Discuss the recent systolic rise with Dr. Ruiz at your next check-in.',
+            'Continue prioritizing consistent bedtime schedules.',
+            'Maintain lower dietary sodium intake on weekdays.',
+          ],
+          trend: 'STABLE',
+        },
+        {
+          weekOffset: 1,
+          narrative:
+            'Blood glucose levels improved by 6% compared to the prior week. Blood pressure stayed roughly flat. Weight is trending down slowly and steadily.',
+          takeaways: [
+            'Meal timing consistency is showing positive impact on fasting numbers.',
+            'Keep logging readings at the same morning hour every day.',
+          ],
+          trend: 'IMPROVING',
+        },
+        {
+          weekOffset: 2,
+          narrative:
+            'Steady progress noted across all cardiovascular metrics. Systolic readings hovered around 144 mmHg with no critical spikes.',
+          takeaways: [
+            'Daily walking routine is helping baseline resting heart rate.',
+            'Continue limiting caffeine intake after 4 PM.',
+          ],
+          trend: 'STABLE',
+        },
+        {
+          weekOffset: 3,
+          narrative:
+            'Initial baseline established. Early readings demonstrated mild stage 1 hypertension patterns with excellent overall logging adherence.',
+          takeaways: [
+            'Baseline profile initialized in coordination with Meridian Family Health.',
+            'Maintain daily logging cadence.',
+          ],
+          trend: 'STABLE',
+        },
+      ],
     },
     {
       id: 'pat_002',
@@ -51,6 +94,48 @@ async function main() {
       dob: '1961-08-22',
       condition: 'Hypertension Stage 2',
       phone: '+1 (555) 203-9944',
+      summaries: [
+        {
+          weekOffset: 0,
+          narrative:
+            'Systolic averages maintained around 134 mmHg this week. Post-meal glucose values were stable within expected thresholds.',
+          takeaways: [
+            'Continue prescribed morning medication adherence.',
+            'Keep tracking post-dinner readings to monitor evening stability.',
+          ],
+          trend: 'STABLE',
+        },
+        {
+          weekOffset: 1,
+          narrative:
+            'Notable reduction in systolic variance compared to baseline. Sleep duration averaged 6.8 hours with consistent bedtime.',
+          takeaways: [
+            'Current lifestyle modifications are demonstrating favorable control.',
+            'Continue regular hydration throughout the day.',
+          ],
+          trend: 'IMPROVING',
+        },
+        {
+          weekOffset: 2,
+          narrative:
+            'Mild morning blood pressure elevations recorded on two consecutive days, resolving by midday.',
+          takeaways: [
+            'Monitor morning stress levels and ensure adequate breakfast timing.',
+            'Discuss morning readings with Dr. Ruiz.',
+          ],
+          trend: 'STABLE',
+        },
+        {
+          weekOffset: 3,
+          narrative:
+            'First monthly evaluation established. Overall stability maintained across all primary cardiovascular indicators.',
+          takeaways: [
+            'Excellent compliance with remote monitoring program.',
+            'Maintain steady physical activity levels.',
+          ],
+          trend: 'STABLE',
+        },
+      ],
     },
     {
       id: 'pat_003',
@@ -60,6 +145,48 @@ async function main() {
       dob: '1981-03-14',
       condition: 'Prediabetes',
       phone: '+1 (555) 304-1188',
+      summaries: [
+        {
+          weekOffset: 0,
+          narrative:
+            'Fasting blood glucose averaged 101 mg/dL this week, showing steady management within target limits. Blood pressure remains optimal at 118/76.',
+          takeaways: [
+            'Fiber-rich meals continue to smooth post-meal glucose spikes.',
+            'Physical activity goals met on 5 out of 7 days.',
+          ],
+          trend: 'IMPROVING',
+        },
+        {
+          weekOffset: 1,
+          narrative:
+            'Glucose stability has improved by 4% compared to two weeks ago. Resting heart rate and sleep patterns remain excellent.',
+          takeaways: [
+            'Continue balanced carbohydrate distribution across daily meals.',
+            'Keep up current evening walking routine.',
+          ],
+          trend: 'IMPROVING',
+        },
+        {
+          weekOffset: 2,
+          narrative:
+            'Very consistent readings throughout the week. Blood pressure and glucose values tracked within normal healthy ranges.',
+          takeaways: [
+            'Healthy lifestyle adjustments showing sustained positive results.',
+            'Continue logging at regular morning hours.',
+          ],
+          trend: 'STABLE',
+        },
+        {
+          weekOffset: 3,
+          narrative:
+            'Initial monitoring period completed with outstanding compliance and healthy metabolic baseline.',
+          takeaways: [
+            'Baseline parameters documented and approved by Dr. Ruiz.',
+            'Maintain weekly vitals check-ins.',
+          ],
+          trend: 'STABLE',
+        },
+      ],
     },
   ];
 
@@ -114,9 +241,39 @@ async function main() {
         data: { lastReadingAt: rows[rows.length - 1].recordedAt },
       });
       console.log(`✅ Seeded ${rows.length} vitals for patient ${p.email}`);
-    } else {
-      console.log(`ℹ️ Patient ${p.email} already has vitals`);
     }
+
+    // Seed 4 weeks of WeeklySummary rows idempotently
+    for (const s of p.summaries) {
+      const weekStart = new Date(Date.now() - (s.weekOffset + 1) * 7 * DAY);
+      weekStart.setUTCHours(12, 0, 0, 0);
+      const weekEnd = new Date(Date.now() - s.weekOffset * 7 * DAY);
+      weekEnd.setUTCHours(12, 0, 0, 0);
+
+      await prisma.weeklySummary.upsert({
+        where: {
+          patientId_weekStart: {
+            patientId,
+            weekStart,
+          },
+        },
+        update: {
+          weekEnd,
+          narrative: s.narrative,
+          takeaways: s.takeaways,
+          trend: s.trend,
+        },
+        create: {
+          patientId,
+          weekStart,
+          weekEnd,
+          narrative: s.narrative,
+          takeaways: s.takeaways,
+          trend: s.trend,
+        },
+      });
+    }
+    console.log(`✅ Seeded 4 weekly summaries for patient ${p.email}`);
   }
 
   console.log('🎉 Database seeding complete!');
@@ -128,4 +285,3 @@ main()
     process.exit(1);
   })
   .finally(() => prisma.$disconnect());
-

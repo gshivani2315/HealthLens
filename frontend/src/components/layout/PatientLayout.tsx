@@ -40,7 +40,7 @@ export default function PatientLayout() {
           </p>
           <div className="flex items-center gap-1.5">
             <NotificationBell items={alerts} />
-            <UserMenu profileHref="/patient/profile" />
+            <UserMenu profileHref="/patient/profile" settingsHref="/patient/settings" />
           </div>
         </header>
         <main className="flex-1 px-4 pb-24 pt-6 sm:px-7 sm:pt-7 lg:pb-10">

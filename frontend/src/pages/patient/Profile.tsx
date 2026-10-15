@@ -27,7 +27,7 @@ export default function Profile() {
 
   return (
     <div className="mx-auto max-w-2xl space-y-6">
-      <h1 className="font-display text-xl font-semibold text-ink">Profile &amp; settings</h1>
+      <h1 className="font-display text-xl font-semibold text-ink">My Profile</h1>
 
       <Card>
         <CardHeader title="Personal information" />

@@ -1,6 +1,8 @@
+import bcrypt from 'bcrypt';
 import { Router } from 'express';
 import { prisma } from '../../db';
 import { requireAuth, requireRole } from '../../middleware/auth';
+import { GlucoseContext, RiskStatus } from '@prisma/client';
 
 const router = Router();
 
@@ -87,10 +89,15 @@ router.get('/overview', requireAuth, requireRole('DOCTOR'), async (req, res, nex
 
       return {
         id: p.id,
+        doctorId: p.doctorId ?? undefined,
         name: p.user.name,
+        email: p.user.email,
+        phone: p.phone ?? undefined,
+        dateOfBirth: p.dateOfBirth ? p.dateOfBirth.toISOString().slice(0, 10) : undefined,
         age,
         gender: p.gender ?? 'Unknown',
         primaryCondition: p.conditions[0]?.label ?? 'General Monitoring',
+        conditions: p.conditions.map((c) => ({ id: c.id, label: c.label })),
         latestBloodPressure: latest?.systolic && latest?.diastolic
           ? { systolic: latest.systolic, diastolic: latest.diastolic }
           : null,
@@ -173,10 +180,15 @@ router.get('/patients', requireAuth, requireRole('DOCTOR'), async (req, res, nex
 
       return {
         id: p.id,
+        doctorId: p.doctorId ?? undefined,
         name: p.user.name,
+        email: p.user.email,
+        phone: p.phone ?? undefined,
+        dateOfBirth: p.dateOfBirth ? p.dateOfBirth.toISOString().slice(0, 10) : undefined,
         age,
         gender: p.gender ?? 'Unknown',
         primaryCondition: p.conditions[0]?.label ?? 'General Monitoring',
+        conditions: p.conditions.map((c) => ({ id: c.id, label: c.label })),
         latestBloodPressure: latest?.systolic && latest?.diastolic
           ? { systolic: latest.systolic, diastolic: latest.diastolic }
           : null,
@@ -187,6 +199,155 @@ router.get('/patients', requireAuth, requireRole('DOCTOR'), async (req, res, nex
     });
 
     res.json(roster);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /doctor/patients (Add Patient)
+// ─────────────────────────────────────────────────────────────────────────────
+router.post('/patients', requireAuth, requireRole('DOCTOR'), async (req, res, next) => {
+  try {
+    const {
+      name,
+      firstName,
+      lastName,
+      email,
+      dateOfBirth,
+      gender,
+      phone,
+      conditions,
+      riskStatus,
+      initialSystolic,
+      initialDiastolic,
+      initialGlucose,
+      initialWeightKg,
+      initialSleepHours,
+    } = req.body ?? {};
+
+    const fullName = name?.trim() || `${firstName?.trim() || ''} ${lastName?.trim() || ''}`.trim();
+
+    if (!fullName || !email || !dateOfBirth) {
+      return res.status(400).json({ message: 'Name, email, and date of birth are required' });
+    }
+
+    const doctor = await prisma.doctor.findFirst({
+      where: {
+        OR: [
+          { userId: req.user!.sub },
+          { userId: req.user!.dbUserId },
+          { id: req.user!.sub },
+        ],
+      },
+    });
+
+    if (!doctor) {
+      return res.status(403).json({ message: 'Doctor profile not found for this account' });
+    }
+
+    const existingUser = await prisma.user.findUnique({ where: { email: email.trim().toLowerCase() } });
+    if (existingUser) {
+      return res.status(409).json({ message: 'A user with this email already exists' });
+    }
+
+    const initialPasswordHash = await bcrypt.hash('demo1234', 10);
+
+    const conditionLabels: string[] = Array.isArray(conditions)
+      ? conditions
+      : typeof conditions === 'string'
+      ? conditions.split(',').map((c: string) => c.trim()).filter(Boolean)
+      : ['General Monitoring'];
+
+    const riskEnum: RiskStatus =
+      riskStatus?.toUpperCase() === 'CRITICAL'
+        ? RiskStatus.CRITICAL
+        : riskStatus?.toUpperCase() === 'MODERATE'
+        ? RiskStatus.MODERATE
+        : RiskStatus.NORMAL;
+
+    const result = await prisma.$transaction(async (tx) => {
+      const user = await tx.user.create({
+        data: {
+          email: email.trim().toLowerCase(),
+          password: initialPasswordHash,
+          name: fullName,
+          role: 'PATIENT',
+        },
+      });
+
+      const patient = await tx.patient.create({
+        data: {
+          userId: user.id,
+          doctorId: doctor.id,
+          doctorAssignedAt: new Date(),
+          gender: gender || 'Unknown',
+          phone: phone || '',
+          dateOfBirth: new Date(dateOfBirth),
+          riskStatus: riskEnum,
+          conditions: {
+            create: conditionLabels.map((label) => ({ label })),
+          },
+          threshold: {
+            create: {},
+          },
+        },
+        include: {
+          conditions: true,
+          user: true,
+        },
+      });
+
+      // If initial telemetry was provided, log first vital reading
+      let latestBp = null;
+      let latestGlu = null;
+      if (initialSystolic || initialDiastolic || initialGlucose || initialWeightKg || initialSleepHours) {
+        const vital = await tx.vital.create({
+          data: {
+            patientId: patient.id,
+            systolic: initialSystolic ? Number(initialSystolic) : undefined,
+            diastolic: initialDiastolic ? Number(initialDiastolic) : undefined,
+            glucose: initialGlucose ? Number(initialGlucose) : undefined,
+            glucoseContext: GlucoseContext.FASTING,
+            weightKg: initialWeightKg ? Number(initialWeightKg) : undefined,
+            sleepHours: initialSleepHours ? Number(initialSleepHours) : undefined,
+            recordedAt: new Date(),
+          },
+        });
+
+        await tx.patient.update({
+          where: { id: patient.id },
+          data: { lastReadingAt: vital.recordedAt },
+        });
+
+        if (vital.systolic && vital.diastolic) {
+          latestBp = { systolic: vital.systolic, diastolic: vital.diastolic };
+        }
+        latestGlu = vital.glucose ?? null;
+      }
+
+      const birthDate = new Date(dateOfBirth);
+      const age = Math.abs(new Date(Date.now() - birthDate.getTime()).getUTCFullYear() - 1970);
+
+      return {
+        id: patient.id,
+        doctorId: doctor.id,
+        name: user.name,
+        email: user.email,
+        phone: patient.phone,
+        dateOfBirth: patient.dateOfBirth?.toISOString().slice(0, 10),
+        age,
+        gender: patient.gender,
+        primaryCondition: conditionLabels[0] || 'General Monitoring',
+        conditions: patient.conditions.map((c) => ({ id: c.id, label: c.label })),
+        latestBloodPressure: latestBp,
+        latestGlucose: latestGlu,
+        riskStatus: toLowerRisk(patient.riskStatus),
+        lastReadingAt: patient.lastReadingAt?.toISOString() || null,
+      };
+    });
+
+    res.status(201).json(result);
   } catch (err) {
     next(err);
   }
@@ -284,6 +445,56 @@ router.get('/patients/:id', requireAuth, requireRole('DOCTOR'), async (req, res,
         weightKg: v.weightKg ?? undefined,
         sleepHours: v.sleepHours ?? undefined,
       })),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PATCH /doctor/profile
+// ─────────────────────────────────────────────────────────────────────────────
+router.patch('/profile', requireAuth, requireRole('DOCTOR'), async (req, res, next) => {
+  try {
+    const { name, clinicName, phone } = req.body ?? {};
+
+    const doctor = await prisma.doctor.findFirst({
+      where: {
+        OR: [
+          { userId: req.user!.sub },
+          { userId: req.user!.dbUserId },
+          { id: req.user!.sub },
+        ],
+      },
+      include: { user: true },
+    });
+
+    if (!doctor) {
+      return res.status(404).json({ message: 'Doctor profile not found' });
+    }
+
+    if (name) {
+      await prisma.user.update({
+        where: { id: doctor.userId },
+        data: { name },
+      });
+    }
+
+    const updated = await prisma.doctor.update({
+      where: { id: doctor.id },
+      data: {
+        ...(clinicName !== undefined ? { clinicName } : {}),
+        ...(phone !== undefined ? { phone } : {}),
+      },
+      include: { user: true },
+    });
+
+    res.json({
+      id: updated.id,
+      name: updated.user.name,
+      email: updated.user.email,
+      clinicName: updated.clinicName,
+      phone: updated.phone,
     });
   } catch (err) {
     next(err);

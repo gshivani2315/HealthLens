@@ -120,4 +120,22 @@ export const patientsService = {
     }
     return apiClient.delete<void>(`/doctor/patients/${patientId}`);
   },
+
+  async getDoctorProfile(): Promise<Doctor> {
+    if (USE_MOCKS) {
+      const { getDoctorById } = await import("./mockData");
+      return mockDelay(getDoctorById());
+    }
+    return apiClient.get<Doctor>("/auth/me");
+  },
+
+  async updateDoctorProfile(updates: { name?: string; clinicName?: string; phone?: string }): Promise<Doctor> {
+    if (USE_MOCKS) {
+      await mockDelay(undefined, 300);
+      const { mockDoctor } = await import("./mockData");
+      Object.assign(mockDoctor, updates);
+      return { ...mockDoctor };
+    }
+    return apiClient.patch<Doctor>("/doctor/profile", updates);
+  },
 };

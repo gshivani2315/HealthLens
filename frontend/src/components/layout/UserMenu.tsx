@@ -2,7 +2,13 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
 
-export default function UserMenu({ profileHref }: { profileHref: string }) {
+export default function UserMenu({
+  profileHref,
+  settingsHref,
+}: {
+  profileHref: string;
+  settingsHref?: string;
+}) {
   const { user, logout } = useAuth();
   const [open, setOpen] = useState(false);
   const initials = (user?.name ?? "?")
@@ -10,6 +16,8 @@ export default function UserMenu({ profileHref }: { profileHref: string }) {
     .map((p) => p[0])
     .slice(0, 2)
     .join("");
+
+  const resolvedSettingsHref = settingsHref || (user?.role === "doctor" ? "/doctor/settings" : "/patient/settings");
 
   return (
     <div className="relative">
@@ -35,12 +43,13 @@ export default function UserMenu({ profileHref }: { profileHref: string }) {
             >
               My profile
             </Link>
-            <button
+            <Link
+              to={resolvedSettingsHref}
               onClick={() => setOpen(false)}
-              className="block w-full rounded px-3 py-2 text-left text-sm text-ink hover:bg-ink-50"
+              className="block rounded px-3 py-2 text-sm text-ink hover:bg-ink-50"
             >
               Account settings
-            </button>
+            </Link>
             <button
               onClick={logout}
               className="block w-full rounded px-3 py-2 text-left text-sm text-brick-600 hover:bg-brick-50"

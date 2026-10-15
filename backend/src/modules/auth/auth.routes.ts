@@ -1,3 +1,4 @@
+import bcrypt from 'bcrypt';
 import { prisma } from '../../db';
 import { Router } from 'express';
 import { login, registerDoctor } from './auth.service';
@@ -78,15 +79,64 @@ router.get('/me', requireAuth, async (req, res, next) => {
           ...(req.user!.email ? [{ email: req.user!.email }] : []),
         ],
       },
+      include: {
+        doctor: true,
+        patient: true,
+      },
     });
 
     if (!user) return res.status(404).json({ message: 'User not found' });
+
     res.json({
       id: user.id,
       email: user.email,
       name: user.name,
       role: user.role.toLowerCase() as 'patient' | 'doctor',
+      clinicName: user.doctor?.clinicName || undefined,
+      phone: user.doctor?.phone || user.patient?.phone || undefined,
     });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.patch('/password', requireAuth, async (req, res, next) => {
+  try {
+    const { currentPassword, newPassword } = req.body ?? {};
+
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ message: 'Current password and new password are required' });
+    }
+
+    if (typeof newPassword !== 'string' || newPassword.length < 6) {
+      return res.status(400).json({ message: 'New password must be at least 6 characters long' });
+    }
+
+    const user = await prisma.user.findFirst({
+      where: {
+        OR: [
+          { id: req.user!.sub },
+          { id: req.user!.dbUserId },
+          ...(req.user!.email ? [{ email: req.user!.email }] : []),
+        ],
+      },
+    });
+
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
+    // Compare current password
+    const ok = await bcrypt.compare(currentPassword, user.password);
+    if (!ok) {
+      return res.status(400).json({ message: 'Current password is incorrect' });
+    }
+
+    const hashed = await bcrypt.hash(newPassword, 10);
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { password: hashed },
+    });
+
+    res.json({ message: 'Password updated successfully' });
   } catch (err) {
     next(err);
   }

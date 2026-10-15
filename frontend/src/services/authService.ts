@@ -66,4 +66,12 @@ export const authService = {
     if (USE_MOCKS) return mockDelay(undefined, 150);
     return apiClient.post<void>("/auth/logout");
   },
+
+  async updatePassword(payload: { currentPassword: string; newPassword: string }): Promise<{ message: string }> {
+    if (USE_MOCKS) {
+      await mockDelay(undefined, 300);
+      return { message: "Password updated successfully" };
+    }
+    return apiClient.patch<{ message: string }>("/auth/password", payload);
+  },
 };

@@ -357,6 +357,136 @@ export const mockWeeklySummaries: WeeklySummary[] = [
       "Continue logging vitals daily; consistency is helping the model give clearer trends.",
     ],
   },
+  {
+    id: "sum_001b",
+    patientId: "pat_001",
+    weekStart: isoDaysAgo(21),
+    weekEnd: isoDaysAgo(14),
+    generatedAt: isoDaysAgo(14, 6),
+    narrative:
+      "Blood pressure and resting heart rate showed minor elevation during evening hours. Morning fasting glucose was well-controlled at 98 mg/dL.",
+    takeaways: [
+      "Maintain consistent fluid intake and evening relaxation routine.",
+      "Monitor evening blood pressure before and after dinner.",
+    ],
+  },
+  {
+    id: "sum_001c",
+    patientId: "pat_001",
+    weekStart: isoDaysAgo(28),
+    weekEnd: isoDaysAgo(21),
+    generatedAt: isoDaysAgo(21, 6),
+    narrative:
+      "Initial baseline period. Average systolic 142 mmHg with stable sleep duration averaging 6.7 hours per night.",
+    takeaways: [
+      "Baseline vitals captured. Begin regular daily log entries.",
+      "Continue prescribed routine.",
+    ],
+  },
+  {
+    id: "sum_003",
+    patientId: "pat_002",
+    weekStart: isoDaysAgo(7),
+    weekEnd: isoDaysAgo(0),
+    generatedAt: isoDaysAgo(0, 6),
+    narrative:
+      "Systolic averages maintained around 134 mmHg this week. Post-meal glucose values were stable within expected thresholds with good compliance.",
+    takeaways: [
+      "Continue prescribed morning medication adherence.",
+      "Keep tracking post-dinner readings to monitor evening stability.",
+    ],
+  },
+  {
+    id: "sum_004",
+    patientId: "pat_002",
+    weekStart: isoDaysAgo(14),
+    weekEnd: isoDaysAgo(7),
+    generatedAt: isoDaysAgo(7, 6),
+    narrative:
+      "Notable reduction in systolic variance compared to baseline. Sleep duration averaged 6.8 hours with consistent bedtime.",
+    takeaways: [
+      "Current lifestyle modifications are demonstrating favorable control.",
+      "Continue regular hydration throughout the day.",
+    ],
+  },
+  {
+    id: "sum_004b",
+    patientId: "pat_002",
+    weekStart: isoDaysAgo(21),
+    weekEnd: isoDaysAgo(14),
+    generatedAt: isoDaysAgo(14, 6),
+    narrative:
+      "Blood pressure trended slightly lower this week, averaging 132/84. Fasting glucose remained stable.",
+    takeaways: [
+      "Consistent morning routine is supporting healthy readings.",
+      "Maintain active walking sessions during weekdays.",
+    ],
+  },
+  {
+    id: "sum_004c",
+    patientId: "pat_002",
+    weekStart: isoDaysAgo(28),
+    weekEnd: isoDaysAgo(21),
+    generatedAt: isoDaysAgo(21, 6),
+    narrative:
+      "Baseline monitoring initialized. Compliance was high with 7 of 7 days logged accurately.",
+    takeaways: [
+      "Initial parameters logged and shared with Dr. Ruiz.",
+      "Keep tracking vitals each morning.",
+    ],
+  },
+  {
+    id: "sum_005",
+    patientId: "pat_003",
+    weekStart: isoDaysAgo(7),
+    weekEnd: isoDaysAgo(0),
+    generatedAt: isoDaysAgo(0, 6),
+    narrative:
+      "Fasting blood glucose averaged 101 mg/dL this week, showing steady management within target limits. Blood pressure remains optimal at 118/76.",
+    takeaways: [
+      "Fiber-rich meals continue to smooth post-meal glucose spikes.",
+      "Physical activity goals met on 5 out of 7 days.",
+    ],
+  },
+  {
+    id: "sum_006",
+    patientId: "pat_003",
+    weekStart: isoDaysAgo(14),
+    weekEnd: isoDaysAgo(7),
+    generatedAt: isoDaysAgo(7, 6),
+    narrative:
+      "Glucose stability has improved by 4% compared to two weeks ago. Resting heart rate and sleep patterns remain excellent.",
+    takeaways: [
+      "Continue balanced carbohydrate distribution across daily meals.",
+      "Keep up current evening walking routine.",
+    ],
+  },
+  {
+    id: "sum_006b",
+    patientId: "pat_003",
+    weekStart: isoDaysAgo(21),
+    weekEnd: isoDaysAgo(14),
+    generatedAt: isoDaysAgo(14, 6),
+    narrative:
+      "Very consistent readings throughout the week. Blood pressure and glucose values tracked within normal healthy ranges.",
+    takeaways: [
+      "Healthy lifestyle adjustments showing sustained positive results.",
+      "Continue logging at regular morning hours.",
+    ],
+  },
+  {
+    id: "sum_006c",
+    patientId: "pat_003",
+    weekStart: isoDaysAgo(28),
+    weekEnd: isoDaysAgo(21),
+    generatedAt: isoDaysAgo(21, 6),
+    narrative:
+      "Initial monitoring period completed with outstanding compliance and healthy metabolic baseline.",
+    takeaways: [
+      "Baseline parameters documented and approved by Dr. Ruiz.",
+      "Maintain weekly vitals check-ins.",
+    ],
+  },
 ];
 
 export function getSummariesForPatient(patientId: string): WeeklySummary[] {
