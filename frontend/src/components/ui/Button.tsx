@@ -11,10 +11,10 @@ interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 const variantStyles: Record<Variant, string> = {
-  primary: "bg-teal-500 text-white hover:bg-teal-600 disabled:bg-ink-100",
-  secondary: "bg-white text-ink border border-line hover:border-ink-300",
-  ghost: "bg-transparent text-ink-500 hover:bg-ink-50",
-  danger: "bg-brick-500 text-white hover:bg-brick-600",
+  primary: "bg-teal-500 text-white shadow-sm hover:-translate-y-0.5 hover:bg-teal-600 hover:shadow-md disabled:bg-ink-100",
+  secondary: "bg-white text-ink border border-line shadow-sm hover:-translate-y-0.5 hover:border-ink-300 hover:shadow-sm",
+  ghost: "bg-transparent text-ink-500 hover:bg-paper",
+  danger: "bg-brick-500 text-white hover:-translate-y-0.5 hover:bg-brick-600",
 };
 
 const sizeStyles: Record<Size, string> = {
@@ -30,7 +30,7 @@ const Button = forwardRef<HTMLButtonElement, ButtonProps>(
         ref={ref}
         disabled={disabled || isLoading}
         className={cx(
-          "inline-flex items-center justify-center gap-2 rounded font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-60",
+          "inline-flex items-center justify-center gap-2 rounded-lg font-medium transition-all duration-200 disabled:cursor-not-allowed disabled:opacity-60",
           variantStyles[variant],
           sizeStyles[size],
           className

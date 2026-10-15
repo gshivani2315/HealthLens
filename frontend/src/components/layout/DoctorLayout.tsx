@@ -31,12 +31,12 @@ export default function DoctorLayout() {
   }
 
   return (
-    <div className="flex min-h-screen bg-paper">
+    <div className="flex min-h-screen bg-[#E8EEE8]">
       <Sidebar items={withBadge} brand="HealthLens" brandSub="Clinical" />
       <div className="flex min-h-screen flex-1 flex-col">
-        <header className="sticky top-0 z-20 flex h-16 items-center justify-between gap-4 border-b border-line bg-white/95 px-4 backdrop-blur sm:px-6">
+        <header className="sticky top-0 z-20 flex h-[76px] items-center justify-between gap-4 border-b border-[#D2DDD4] bg-[#E8EEE8]/90 px-4 backdrop-blur-xl sm:px-7">
           <div className="flex items-center gap-2 lg:hidden">
-            <span className="flex h-7 w-7 items-center justify-center rounded bg-ink-600 text-xs font-bold text-white">
+            <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-[#344B3C] text-xs font-bold text-white">
               H
             </span>
           </div>
@@ -45,7 +45,7 @@ export default function DoctorLayout() {
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Search patients by name or ID"
-              className="w-full rounded border border-line bg-paper px-3 py-2 text-sm text-ink placeholder:text-ink-400 focus:border-teal-400 focus:bg-white focus:outline-none"
+              className="w-full input"
             />
           </form>
           <div className="flex items-center gap-1.5">
@@ -53,7 +53,7 @@ export default function DoctorLayout() {
             <UserMenu profileHref="/doctor/dashboard" />
           </div>
         </header>
-        <main className="flex-1 px-4 pb-24 pt-6 sm:px-6 lg:pb-10">
+        <main className="flex-1 px-4 pb-24 pt-6 sm:px-7 sm:pt-7 lg:pb-10">
           <Outlet />
         </main>
       </div>

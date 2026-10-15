@@ -3,40 +3,227 @@
 @tailwind utilities;
 
 @layer base {
-  html {
-    @apply font-body text-ink;
-  }
-  body {
-    @apply bg-paper;
-  }
-  h1, h2, h3, h4 {
-    @apply font-display;
-  }
-  :focus-visible {
-    outline: 2px solid #0F6B66;
-    outline-offset: 2px;
-  }
-  ::selection {
-    background-color: #C7DEDC;
-  }
-  .tabular {
-    font-variant-numeric: tabular-nums;
-  }
+  html { @apply font-body text-ink antialiased; background: #e8eee8; }
+  body { @apply bg-paper; font-feature-settings: "ss01" on; background: #e8eee8; background-image: radial-gradient(ellipse at 85% 0%, rgba(255,255,255,.45), transparent 36%); background-attachment: fixed; }
+  h1, h2, h3, h4 { @apply font-display tracking-tight; }
+  :focus-visible { outline: 2px solid #426B5A; outline-offset: 3px; }
+  ::selection { background-color: #E4D7C5; color: #292A27; }
+  button, a, input, select, textarea { -webkit-tap-highlight-color: transparent; }
+  button, a { transition-property: color, background-color, border-color, box-shadow, transform, opacity; transition-duration: 180ms; transition-timing-function: cubic-bezier(.2,.7,.2,1); }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-thumb { background: #D1C8BB; border-radius: 999px; border: 2px solid #F7F4EE; }
 }
 
 @layer components {
-  .input {
-    @apply w-full rounded border border-line px-3 py-2.5 text-sm text-ink placeholder:text-ink-300 focus:border-teal-400 focus:outline-none;
-  }
+  .input { @apply w-full rounded-lg border border-line bg-white px-3.5 py-3 text-sm text-ink placeholder:text-ink-300 transition-all duration-200 focus:border-teal-500 focus:outline-none focus:ring-4 focus:ring-teal-100; }
+  .eyebrow { @apply text-[11px] font-semibold uppercase tracking-[0.16em] text-ink-400; }
+  .page-enter { animation: page-enter 420ms cubic-bezier(.2,.7,.2,1) both; }
+  .soft-panel { @apply rounded-2xl border border-line/80 bg-white shadow-panel; }
+  .editorial-hero { box-shadow: 0 18px 45px rgba(70, 62, 47, .07), inset 0 1px 0 rgba(255,255,255,.65); }
+  .editorial-card { position: relative; isolation: isolate; overflow: hidden; }
+  .editorial-card::after { content: ""; position: absolute; z-index: -1; width: 150px; height: 150px; right: -88px; bottom: -100px; border: 1px solid rgba(84,123,91,.13); border-radius: 999px; transition: transform .45s cubic-bezier(.2,.7,.2,1); }
+  .editorial-card:hover::after { transform: scale(1.3); }
+  .section-kicker { @apply inline-flex items-center gap-2 text-[10px] font-bold uppercase tracking-[.18em]; }
+  .section-kicker::before { content: ""; display: inline-block; width: 18px; height: 1px; background: currentColor; opacity: .65; }
+  .metric-tile { position: relative; overflow: hidden; }
+  .metric-tile::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 3px; background: linear-gradient(90deg, #426B5A, #B9853D); opacity: .8; transform: scaleX(.22); transform-origin: left; transition: transform .35s ease; }
+  .metric-tile:hover::before { transform: scaleX(1); }
+  .table-row-hover { transition: background-color .18s ease, box-shadow .18s ease; }
+  .table-row-hover:hover { box-shadow: inset 3px 0 #547B5B; }
+}
+
+@keyframes page-enter { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes float-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; transition-duration: 0.01ms !important; }
 }
 
 @layer utilities {
-  .scrollbar-thin::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
-  }
-  .scrollbar-thin::-webkit-scrollbar-thumb {
-    background-color: #B1C1CE;
-    border-radius: 3px;
-  }
+  .scrollbar-thin::-webkit-scrollbar { width: 6px; height: 6px; }
+  .scrollbar-thin::-webkit-scrollbar-thumb { background-color: #C9C0B3; border-radius: 999px; }
+}
+
+/* Health-tech dashboard visual language */
+@layer components {
+  .dashboard-surface { background: #e8eee8; }
+  .health-card { border: 1px solid rgba(255,255,255,.72); border-radius: 1.25rem; box-shadow: 0 5px 18px rgba(35,53,43,.045); }
+  .health-card-dark { color: #f8fbf8; background: linear-gradient(145deg,#234637 0%,#315c49 100%); border: 1px solid rgba(255,255,255,.1); }
+  .health-card-sage { background: #b8ccc0; border: 1px solid rgba(255,255,255,.3); }
+  .health-section-title { font-size: 1.2rem; font-weight: 650; letter-spacing: -.035em; color: #202b27; }
+}
+
+/* V4: Consistent HealthFlow-inspired visual system across every route */
+:root {
+  --hl-workspace: #e7eee8;
+  --hl-mint: #dce8df;
+  --hl-sage: #a9c1b3;
+  --hl-forest: #234b3b;
+  --hl-forest-deep: #173a2d;
+  --hl-charcoal: #252a2e;
+  --hl-line: #d6e0d8;
+  --hl-ink: #202b27;
+}
+
+@layer base {
+  html, body { background: var(--hl-workspace) !important; color: var(--hl-ink); }
+  body { background-image: radial-gradient(ellipse at 80% 0%, rgba(255,255,255,.5), transparent 40%) !important; }
+  h1, h2, h3, h4 { color: var(--hl-ink); }
+}
+
+/* Route canvases and common surfaces */
+main { background-color: transparent; }
+main .soft-panel,
+main [class~="bg-white"],
+main [class*="bg-[#FFFEFC]"],
+main [class*="bg-[linear-gradient(145deg,#FFFFFF"] {
+  border-color: var(--hl-line) !important;
+  box-shadow: 0 5px 18px rgba(35, 65, 48, .045) !important;
+}
+main [class*="rounded-2xl"][class*="border"] { border-radius: 1.15rem; }
+main [class*="bg-paper"] { background-color: #f5f8f4 !important; }
+main [class*="text-ink-400"], main [class*="text-ink-500"] { color: #68786f !important; }
+main [class*="border-line"] { border-color: var(--hl-line) !important; }
+main [class*="hover:bg-[#DDE7DF]"]:hover,
+main [class*="hover:bg-[#DDE7DF]"] { transition: background-color .18s ease; }
+
+/* Strong green feature panels, preserving their existing content and actions */
+main [class*="bg-[linear-gradient(145deg,#234637"],
+main [class*="bg-[#234637]"],
+main [class*="bg-[#234637]"] {
+  background: linear-gradient(145deg, var(--hl-forest-deep), var(--hl-forest)) !important;
+  color: #f7fbf8 !important;
+  border-color: rgba(255,255,255,.12) !important;
+}
+main [class*="bg-[#DDE7DF]"], main [class*="bg-[#E5E9DF]"] { background-color: #dce8df !important; }
+main [class*="bg-[#FFFEFC]"] { background-color: #fff !important; }
+
+/* Shared form controls across login, profile, logging, filters and thresholds */
+.input, input:not([type="checkbox"]):not([type="radio"]), select, textarea {
+  border-color: #cbd9cf;
+  border-radius: .7rem;
+}
+.input:focus, input:focus, select:focus, textarea:focus {
+  border-color: #47765d !important;
+  box-shadow: 0 0 0 3px rgba(71,118,93,.14) !important;
+}
+button:focus-visible, a:focus-visible { outline-color: #47765d; }
+
+/* Consistent chart and table styling across patient and clinician routes */
+main table thead, main table tr[class*="bg-[#DDE7DF]"] { background-color: #e2ece4 !important; }
+main table tbody tr:hover { background-color: #edf4ee; }
+main svg text { font-family: 'DM Sans', sans-serif; }
+
+/* Avoid the old beige editorial accents leaking into secondary pages */
+main [class*="bg-[#F3EBDD]"] { background-color: #e2ece4 !important; color: #244b3b !important; }
+main [class*="border-[#E4DED4]"], main [class*="border-[#D7CFC2]"] { border-color: var(--hl-line) !important; }
+
+@media (max-width: 1023px) {
+  main { padding-top: 1.1rem !important; }
+}
+
+
+/* V5: Reference-matched green surfaces across ALL pages.
+   Keep dark feature cards and semantic severity badges distinct. */
+:root {
+  --hl-workspace: #e4eee7;
+  --hl-mint: #dcebe2;
+  --hl-sage: #aec8b9;
+  --hl-forest: #214c3b;
+  --hl-forest-deep: #153a2c;
+  --hl-charcoal: #252a2e;
+  --hl-line: #c5d9cc;
+  --hl-ink: #20352b;
+  --hl-card: #d9e9df;
+  --hl-card-light: #edf5ef;
+}
+@layer base {
+  html, body { background-color: var(--hl-workspace) !important; color: var(--hl-ink); }
+  body { background-image: radial-gradient(ellipse at 80% 0%, rgba(255,255,255,.32), transparent 42%) !important; }
+  ::selection { background: #a8cbb6; color: #183b2d; }
+  ::-webkit-scrollbar-thumb { background: #9fbeac; border-color: var(--hl-workspace); }
+}
+@layer components {
+  .soft-panel { background: var(--hl-card-light); border-color: var(--hl-line); }
+  .health-card-sage { background: linear-gradient(145deg, #c9dfd1, #a9c8b7); }
+  .metric-tile::before { background: linear-gradient(90deg, #245b43, #75a68a); }
+  .table-row-hover:hover { box-shadow: inset 3px 0 #245b43; }
+}
+/* App canvases and common card surfaces */
+main { background: transparent !important; }
+main .bg-white,
+main [class~="bg-white"],
+main [class*="bg-[#FFFEFC]"],
+main [class*="bg-[linear-gradient(145deg,#FFFFFF"],
+main .soft-panel {
+  background-color: var(--hl-card-light) !important;
+  border-color: var(--hl-line) !important;
+  box-shadow: 0 5px 18px rgba(28, 73, 48, .07) !important;
+}
+main [class*="rounded-2xl"][class*="border"],
+main [class*="rounded-xl"][class*="border"] {
+  border-color: var(--hl-line);
+}
+main [class*="bg-paper"] { background-color: #dcebe2 !important; }
+main [class*="bg-[#FFFEFC]"] { background-color: #edf5ef !important; }
+main [class*="bg-[#DDE7DF]"],
+main [class*="bg-[#E5E9DF]"],
+main [class*="bg-[#E2ECE4]"] { background-color: #c9dfd1 !important; }
+main [class*="text-ink-400"], main [class*="text-ink-500"] { color: #5d7567 !important; }
+main [class*="border-line"] { border-color: var(--hl-line) !important; }
+main [class*="hover:bg-[#DDE7DF]"]:hover { background-color: #c7dfd0 !important; }
+/* Dark forest feature cards remain high-contrast */
+main [class*="bg-[linear-gradient(145deg,#234637"],
+main [class*="bg-[#234637]"],
+main .health-card-dark {
+  background: linear-gradient(145deg, var(--hl-forest-deep), var(--hl-forest)) !important;
+  color: #f4fbf6 !important;
+  border-color: rgba(255,255,255,.13) !important;
+}
+/* Green charts and controls */
+main svg .recharts-cartesian-grid line { stroke: #b7d0c0 !important; }
+main svg .recharts-cartesian-axis line,
+main svg .recharts-cartesian-axis-tick line { stroke: #a9c5b3 !important; }
+main svg text { font-family: 'DM Sans', sans-serif; }
+.input, input:not([type="checkbox"]):not([type="radio"]), select, textarea {
+  background-color: #f0f7f2;
+  border-color: #bdd3c4;
+  color: #20352b;
+}
+.input:focus, input:focus, select:focus, textarea:focus {
+  border-color: #397d58 !important;
+  box-shadow: 0 0 0 3px rgba(57,125,88,.16) !important;
+}
+button:focus-visible, a:focus-visible { outline-color: #397d58; }
+main table thead, main table tr[class*="bg-[#DDE7DF]"] { background-color: #cde2d3 !important; }
+main table tbody tr:hover { background-color: #dcebe2; }
+/* Make patient/doctor page hero areas consistent with the reference palette */
+.editorial-hero:not(.health-card-dark) { background: linear-gradient(125deg, #dcebe2, #c5dfce) !important; }
+
+
+/* V6 reference dashboard layout */
+.health-snapshot-card {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid rgba(255,255,255,.12);
+  border-radius: 1.15rem;
+  padding: 1.25rem;
+  color: #f3faf5;
+  background: radial-gradient(ellipse at 80% 10%, rgba(101,151,122,.28), transparent 42%), linear-gradient(145deg, #214c3b, #153a2c);
+  box-shadow: 0 10px 28px rgba(26,68,47,.15);
+}
+.health-snapshot-card::after {
+  content: "";
+  position: absolute;
+  width: 190px;
+  height: 190px;
+  right: -110px;
+  bottom: -100px;
+  border: 1px solid rgba(222,241,228,.15);
+  border-radius: 50%;
+  pointer-events: none;
+}
+.health-snapshot-card > * { position: relative; z-index: 1; }
+@media (max-width: 639px) {
+  .health-snapshot-card { padding: 1rem; }
 }

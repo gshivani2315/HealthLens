@@ -19,17 +19,17 @@ export default function Sidebar({
   brandSub: string;
 }) {
   return (
-    <aside className="hidden w-60 shrink-0 flex-col border-r border-line bg-white lg:flex">
-      <div className="flex h-16 items-center gap-2 border-b border-line px-5">
-        <span className="flex h-7 w-7 items-center justify-center rounded bg-teal-500">
+    <aside className="hidden w-64 shrink-0 flex-col border-r border-[#303638] bg-[#252A2D] text-white lg:flex">
+      <div className="flex h-[76px] items-center gap-3 border-b border-white/10 px-6">
+        <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#315846] shadow-sm ring-1 ring-white/10">
           <PulseMark />
         </span>
         <div className="leading-tight">
-          <p className="font-display text-sm font-semibold text-ink">{brand}</p>
-          <p className="text-[11px] text-ink-400">{brandSub}</p>
+          <p className="font-display text-base font-semibold text-white">{brand}</p>
+          <p className="text-[10px] font-medium uppercase tracking-[0.16em] text-white/45">{brandSub}</p>
         </div>
       </div>
-      <nav className="flex-1 space-y-1 px-3 py-4">
+      <nav className="flex-1 space-y-1.5 px-3 py-5">
         {items.map((item) => {
           const Icon = icons[item.icon];
           return (
@@ -38,8 +38,8 @@ export default function Sidebar({
               to={item.to}
               className={({ isActive }) =>
                 cx(
-                  "flex items-center justify-between rounded px-3 py-2.5 text-sm font-medium transition-colors",
-                  isActive ? "bg-teal-50 text-teal-600" : "text-ink-500 hover:bg-ink-50 hover:text-ink"
+                  "flex items-center justify-between rounded-xl px-3.5 py-3 text-sm font-medium transition-all duration-200",
+                  isActive ? "bg-[#454B4F] text-white shadow-inner ring-1 ring-white/5" : "text-white/60 hover:bg-white/10 hover:text-white"
                 )
               }
             >
