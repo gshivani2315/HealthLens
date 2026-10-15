@@ -7,15 +7,15 @@ interface Metric extends MetricChange {
 
 export default function StatStrip({ metrics }: { metrics: Metric[] }) {
   return (
-    <div className="grid grid-cols-2 divide-x divide-line rounded border border-line bg-white sm:grid-cols-4">
+    <div className="grid grid-cols-2 gap-px overflow-hidden rounded-2xl border border-line/80 bg-line/70 shadow-panel sm:grid-cols-4">
       {metrics.map((m) => {
         const isUp = m.changeVsWeekAvg > 0;
         const isFlat = m.changeVsWeekAvg === 0;
         return (
-          <div key={m.label} className="px-4 py-4 first:pl-4 sm:px-5">
-            <div className="text-xs font-medium uppercase tracking-wide text-ink-400">{m.label}</div>
+          <div key={m.label} className="metric-tile bg-white px-4 py-5 transition-colors hover:bg-[#FFFEFC] sm:px-5">
+            <div className="text-[10px] font-bold uppercase tracking-[0.15em] text-ink-400">{m.label}</div>
             <div className="mt-1.5 flex items-baseline gap-1">
-              <span className="font-mono tabular text-2xl font-semibold text-ink">{m.display}</span>
+              <span className="font-mono tabular text-[1.8rem] font-medium tracking-tight text-ink sm:text-3xl">{m.display}</span>
               <span className="text-xs text-ink-400">{m.unit}</span>
             </div>
             <div
