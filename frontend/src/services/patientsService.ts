@@ -11,6 +11,8 @@
 import { apiClient, mockDelay, USE_MOCKS } from "./apiClient";
 import {
   CreatePatientPayload,
+  CreatePatientResult,
+  Doctor,
   DoctorOverview,
   PatientDetail,
   PatientProfile,
@@ -96,12 +98,12 @@ export const patientsService = {
     return apiClient.get<PatientDetail>(`/doctor/patients/${patientId}`);
   },
 
-  async createPatient(payload: CreatePatientPayload, doctorId?: string): Promise<PatientRosterRow> {
+  async createPatient(payload: CreatePatientPayload, doctorId?: string): Promise<CreatePatientResult> {
     if (USE_MOCKS) {
       await mockDelay(undefined, 300);
       return createPatientMock(payload, doctorId);
     }
-    return apiClient.post<PatientRosterRow>("/doctor/patients", { ...payload, doctorId });
+    return apiClient.post<CreatePatientResult>("/doctor/patients", { ...payload, doctorId });
   },
 
   async updatePatient(patientId: string, updates: UpdatePatientPayload): Promise<PatientProfile> {

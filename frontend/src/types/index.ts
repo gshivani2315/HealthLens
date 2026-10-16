@@ -28,6 +28,8 @@ export interface DoctorRegisterPayload {
 
 export interface AuthResponse {
   token: string;
+  refreshToken?: string;   // absent in mock mode
+  expiresAt?: number;
   user: AuthUser;
 }
 
@@ -215,10 +217,7 @@ export interface DoctorOverview {
 export interface PatientDetail {
   profile: PatientProfile;
   riskStatus: RiskStatus;
-  aiClinicalInsight: {
-    generatedAt: string;
-    narrative: string;
-  };
+  aiClinicalInsight: { generatedAt: string; narrative: string } | null;   // was non-null;
   alertHistory: AlertItem[];
   vitalsLog: VitalsEntry[];
 }
@@ -233,3 +232,5 @@ export interface ThresholdConfig {
   weightDeltaKg: number;
   weightDeltaDays: number;
 }
+
+export type CreatePatientResult = PatientRosterRow & { temporaryPassword?: string };

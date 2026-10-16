@@ -237,11 +237,20 @@ export default function PatientDetail() {
             </div>
           </Card>
 
-          <Card className="border-teal-100 bg-teal-50/40">
-            <p className="text-xs font-medium uppercase tracking-wide text-teal-600">Gemini trend analysis</p>
-            <p className="mt-2 text-[15px] leading-relaxed text-ink">{aiClinicalInsight.narrative}</p>
-            <p className="mt-2 text-xs text-ink-400">Generated {timeAgo(aiClinicalInsight.generatedAt)}</p>
-          </Card>
+          {aiClinicalInsight ? (
+            <Card className="border-teal-100 bg-teal-50/40">
+              <p className="text-xs font-medium uppercase tracking-wide text-teal-600">Gemini trend analysis</p>
+              <p className="mt-2 text-[15px] leading-relaxed text-ink">{aiClinicalInsight.narrative}</p>
+              <p className="mt-2 text-xs text-ink-400">Generated {timeAgo(aiClinicalInsight.generatedAt)}</p>
+            </Card>
+          ) : (
+            <Card>
+              <p className="text-xs font-medium uppercase tracking-wide text-ink-400">Gemini trend analysis</p>
+              <p className="mt-2 text-sm text-ink-400">
+                No AI assessment yet. It appears once enough readings have been logged.
+              </p>
+            </Card>
+          )}
 
           <Card>
             <div className="flex items-start justify-between">

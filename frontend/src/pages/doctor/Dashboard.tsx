@@ -31,6 +31,7 @@ export default function DoctorDashboard() {
   const [deletingPatient, setDeletingPatient] = useState<PatientRosterRow | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const [credentials, setCredentials] = useState<{ name: string; email: string; password: string } | null>(null);
 
   // Add Patient Form State
   const [name, setName] = useState("");
@@ -105,11 +106,11 @@ export default function DoctorDashboard() {
   function openEditModal(patient: PatientRosterRow) {
     setEditingPatient(patient);
     setEditName(patient.name);
-    setEditEmail(patient.email || `${patient.name.toLowerCase().replace(/\s+/g, ".")}@example.com`);
-    setEditPhone(patient.phone || "+1 (555) 000-0000");
+    setEditEmail(patient.email ?? "");
+    setEditPhone(patient.phone ?? "");
     setEditDateOfBirth(patient.dateOfBirth || "1980-01-01");
     setEditGender(patient.gender);
-    setEditConditions(patient.primaryCondition && patient.primaryCondition !== "—" ? patient.primaryCondition : "General Monitoring");
+    setEditConditions(patient.conditions?.map((c) => c.label).join(", ") ?? patient.primaryCondition);
     setEditRiskStatus(patient.riskStatus);
     setFormError(null);
   }
@@ -144,7 +145,10 @@ export default function DoctorDashboard() {
 
     setIsSubmitting(true);
     try {
-      await patientsService.createPatient(payload, doctorId);
+      const created = await patientsService.createPatient(payload, doctorId);
+      if (created.temporaryPassword) {
+        setCredentials({ name: payload.name, email: payload.email, password: created.temporaryPassword });
+      }
       showToast(`Patient ${name.trim()} added successfully to your roster.`, "success");
       setIsAddOpen(false);
       resetAddForm();
@@ -231,7 +235,7 @@ export default function DoctorDashboard() {
             A considered view of your patient roster, emerging risks, and the people who may need your attention today.
           </p>
           <div className="mt-5 inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-3 py-1.5 text-xs font-medium text-white/85">
-            <span className="h-2 w-2 rounded-full bg-moss-500" /> Physician: {user?.name ?? "Dr. Elena Ruiz"}
+            <span className="h-2 w-2 rounded-full bg-moss-500" /> Physician: {user?.name ?? "Doctor"}
           </div>
         </div>
       </section>
@@ -446,7 +450,7 @@ export default function DoctorDashboard() {
       <Modal open={isAddOpen} onClose={() => setIsAddOpen(false)} title="Add New Patient">
         <form onSubmit={handleAddPatient} className="space-y-4">
           <p className="text-xs text-ink-400">
-            Register a patient under your care. The patient will be linked to physician {user?.name ?? "Dr. Elena Ruiz"}.
+            Register a patient under your care. The patient will be linked to physician {user?.name ?? "Doctor"}.
           </p>
 
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -711,6 +715,32 @@ export default function DoctorDashboard() {
             <Button variant="danger" isLoading={isSubmitting} onClick={handleDeletePatient}>
               Remove Patient
             </Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* PATIENT CREDENTIALS MODAL */}
+      <Modal open={!!credentials} onClose={() => setCredentials(null)} title="Patient login created">
+        <div className="space-y-3">
+          <p className="text-sm text-ink">
+            Give these sign-in details to <span className="font-semibold">{credentials?.name}</span>. The password is shown only once.
+          </p>
+          <div className="rounded-lg border border-line bg-paper p-3 font-mono text-sm text-ink">
+            <p>Email: {credentials?.email}</p>
+            <p>Temporary password: {credentials?.password}</p>
+          </div>
+          <p className="text-xs text-ink-400">Ask them to change it under Account settings after signing in.</p>
+          <div className="flex justify-end gap-2">
+            <Button
+              variant="secondary"
+              onClick={() =>
+                credentials &&
+                navigator.clipboard?.writeText(`Email: ${credentials.email}\nTemporary password: ${credentials.password}`)
+              }
+            >
+              Copy
+            </Button>
+            <Button onClick={() => setCredentials(null)}>Done</Button>
           </div>
         </div>
       </Modal>
