@@ -1,62 +1,61 @@
 import type { Request, Response, NextFunction } from 'express';
-import { verifyToken, TokenPayload } from '../lib/jwt';
 import { prisma } from '../db';
+import { supabaseAdmin } from '../lib/supabase';
 
-// Tell Express's Request type that it may carry a `user` after auth runs
+export interface AuthedUser {
+  sub: string;
+  email?: string;
+  role: 'PATIENT' | 'DOCTOR';
+  dbUserId: string;
+}
+
 declare global {
   namespace Express {
     interface Request {
-      user?: TokenPayload & { dbUserId?: string };
+      user?: AuthedUser;
     }
   }
 }
 
 export async function requireAuth(req: Request, res: Response, next: NextFunction) {
   const header = req.headers.authorization;
-
   if (!header || !header.startsWith('Bearer ')) {
     return res.status(401).json({ message: 'Missing or invalid Authorization header' });
   }
+  const token = header.slice(7);
 
-  try {
-    const payload = verifyToken(header.slice(7));
-
-    // Look up user in database by ID or by email (in case Supabase Auth UUID differs from User cuid)
-    let dbUser = await prisma.user.findFirst({
-      where: {
-        OR: [
-          { id: payload.sub },
-          ...(payload.email ? [{ email: payload.email }] : []),
-        ],
-      },
-    });
-
-    // If verified via Supabase Auth but not yet in our database, auto-provision
-    if (!dbUser && payload.email) {
-      dbUser = await prisma.user.create({
-        data: {
-          id: payload.sub,
-          email: payload.email,
-          name: payload.email.split('@')[0],
-          password: 'SUPABASE_MANAGED_AUTH',
-          role: payload.role,
-          ...(payload.role === 'DOCTOR'
-            ? { doctor: { create: { clinicName: 'HealthLens Clinic' } } }
-            : { patient: { create: { threshold: { create: {} } } } }),
-        },
-      });
-    }
-
-    req.user = {
-      ...payload,
-      dbUserId: dbUser?.id || payload.sub,
-      role: dbUser ? (dbUser.role as 'PATIENT' | 'DOCTOR') : payload.role,
-    };
-
-    next();
-  } catch (err) {
+  const { data, error } = await supabaseAdmin.auth.getUser(token);
+  if (error || !data.user) {
     return res.status(401).json({ message: 'Invalid or expired token' });
   }
+  const supaUser = data.user;
+
+  const rawRole =
+    (supaUser.app_metadata as any)?.role ||
+    (supaUser.user_metadata as any)?.role ||
+    'PATIENT';
+  const role: 'PATIENT' | 'DOCTOR' = String(rawRole).toUpperCase() === 'DOCTOR' ? 'DOCTOR' : 'PATIENT';
+
+  // Auto-provision for a Supabase user who doesn't yet have a row in our own tables
+  // (e.g. created straight from the Supabase dashboard rather than through register-doctor).
+  let dbUser = await prisma.user.findUnique({ where: { id: supaUser.id } });
+  if (!dbUser) {
+    dbUser = await prisma.user.create({
+      data: {
+        id: supaUser.id,
+        email: supaUser.email!,
+        name: (supaUser.user_metadata as any)?.name || supaUser.email!.split('@')[0],
+        password: 'SUPABASE_MANAGED_AUTH',
+        role,
+        ...(role === 'DOCTOR'
+          ? { doctor: { create: { clinicName: (supaUser.user_metadata as any)?.clinicName || 'HealthLens Clinic' } } }
+          : { patient: { create: { threshold: { create: {} } } } }),
+      },
+    });
+  }
+
+  req.user = { sub: supaUser.id, email: supaUser.email, role: dbUser.role as 'PATIENT' | 'DOCTOR', dbUserId: dbUser.id };
+  next();
 }
 
 export function requireRole(...roles: Array<'PATIENT' | 'DOCTOR'>) {

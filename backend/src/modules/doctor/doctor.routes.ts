@@ -1,9 +1,9 @@
-import bcrypt from 'bcrypt';
+import crypto from 'crypto';
 import { Router } from 'express';
 import { prisma } from '../../db';
 import { requireAuth, requireRole } from '../../middleware/auth';
+import { supabaseAdmin } from '../../lib/supabase';
 import { GlucoseContext, RiskStatus } from '@prisma/client';
-
 const router = Router();
 
 function toLowerRisk(risk: string): 'normal' | 'moderate' | 'critical' {
@@ -132,6 +132,11 @@ router.get('/overview', requireAuth, requireRole('DOCTOR'), async (req, res, nex
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /doctor/patients?search=&filter=all|critical|needs_review
 // ─────────────────────────────────────────────────────────────────────────────
+function generateTempPassword(): string {
+  // 12 chars, URL-safe, shown once to the doctor to hand to the patient.
+  return crypto.randomBytes(9).toString('base64url');
+}
+
 router.get('/patients', requireAuth, requireRole('DOCTOR'), async (req, res, next) => {
   try {
     const search = (req.query.search as string) || '';
@@ -227,8 +232,9 @@ router.post('/patients', requireAuth, requireRole('DOCTOR'), async (req, res, ne
     } = req.body ?? {};
 
     const fullName = name?.trim() || `${firstName?.trim() || ''} ${lastName?.trim() || ''}`.trim();
+    const normalizedEmail = email?.trim().toLowerCase();
 
-    if (!fullName || !email || !dateOfBirth) {
+    if (!fullName || !normalizedEmail || !dateOfBirth) {
       return res.status(400).json({ message: 'Name, email, and date of birth are required' });
     }
 
@@ -241,17 +247,32 @@ router.post('/patients', requireAuth, requireRole('DOCTOR'), async (req, res, ne
         ],
       },
     });
-
     if (!doctor) {
       return res.status(403).json({ message: 'Doctor profile not found for this account' });
     }
 
-    const existingUser = await prisma.user.findUnique({ where: { email: email.trim().toLowerCase() } });
+    const existingUser = await prisma.user.findUnique({ where: { email: normalizedEmail } });
     if (existingUser) {
       return res.status(409).json({ message: 'A user with this email already exists' });
     }
 
-    const initialPasswordHash = await bcrypt.hash('demo1234', 10);
+    // 1. Create the Supabase Auth account FIRST (outside the DB transaction — it's an external
+    //    API call, not something Postgres can roll back). email_confirm:true skips the
+    //    confirmation-email step so the temp password works immediately.
+    const tempPassword = generateTempPassword();
+    const { data: created, error: supaErr } = await supabaseAdmin.auth.admin.createUser({
+      email: normalizedEmail,
+      password: tempPassword,
+      email_confirm: true,
+      user_metadata: { name: fullName, role: 'PATIENT' },
+    });
+    if (supaErr || !created.user) {
+      const msg = supaErr?.message?.toLowerCase().includes('already')
+        ? 'A user with this email already exists'
+        : `Could not create the patient's login: ${supaErr?.message}`;
+      return res.status(supaErr?.message?.toLowerCase().includes('already') ? 409 : 502).json({ message: msg });
+    }
+    const supaUserId = created.user.id;
 
     const conditionLabels: string[] = Array.isArray(conditions)
       ? conditions
@@ -266,88 +287,83 @@ router.post('/patients', requireAuth, requireRole('DOCTOR'), async (req, res, ne
         ? RiskStatus.MODERATE
         : RiskStatus.NORMAL;
 
-    const result = await prisma.$transaction(async (tx) => {
-      const user = await tx.user.create({
-        data: {
-          email: email.trim().toLowerCase(),
-          password: initialPasswordHash,
-          name: fullName,
-          role: 'PATIENT',
-        },
-      });
-
-      const patient = await tx.patient.create({
-        data: {
-          userId: user.id,
-          doctorId: doctor.id,
-          doctorAssignedAt: new Date(),
-          gender: gender || 'Unknown',
-          phone: phone || '',
-          dateOfBirth: new Date(dateOfBirth),
-          riskStatus: riskEnum,
-          conditions: {
-            create: conditionLabels.map((label) => ({ label })),
-          },
-          threshold: {
-            create: {},
-          },
-        },
-        include: {
-          conditions: true,
-          user: true,
-        },
-      });
-
-      // If initial telemetry was provided, log first vital reading
-      let latestBp = null;
-      let latestGlu = null;
-      if (initialSystolic || initialDiastolic || initialGlucose || initialWeightKg || initialSleepHours) {
-        const vital = await tx.vital.create({
+    try {
+      const result = await prisma.$transaction(async (tx) => {
+        const user = await tx.user.create({
           data: {
-            patientId: patient.id,
-            systolic: initialSystolic ? Number(initialSystolic) : undefined,
-            diastolic: initialDiastolic ? Number(initialDiastolic) : undefined,
-            glucose: initialGlucose ? Number(initialGlucose) : undefined,
-            glucoseContext: GlucoseContext.FASTING,
-            weightKg: initialWeightKg ? Number(initialWeightKg) : undefined,
-            sleepHours: initialSleepHours ? Number(initialSleepHours) : undefined,
-            recordedAt: new Date(),
+            id: supaUserId,
+            email: normalizedEmail,
+            password: 'SUPABASE_MANAGED_AUTH',
+            name: fullName,
+            role: 'PATIENT',
           },
         });
 
-        await tx.patient.update({
-          where: { id: patient.id },
-          data: { lastReadingAt: vital.recordedAt },
+        const patient = await tx.patient.create({
+          data: {
+            userId: user.id,
+            doctorId: doctor.id,
+            doctorAssignedAt: new Date(),
+            gender: gender || 'Unknown',
+            phone: phone || '',
+            dateOfBirth: new Date(dateOfBirth),
+            riskStatus: riskEnum,
+            conditions: { create: conditionLabels.map((label) => ({ label })) },
+            threshold: { create: {} },
+          },
+          include: { conditions: true, user: true },
         });
 
-        if (vital.systolic && vital.diastolic) {
-          latestBp = { systolic: vital.systolic, diastolic: vital.diastolic };
+        let latestBp = null;
+        let latestGlu = null;
+        if (initialSystolic || initialDiastolic || initialGlucose || initialWeightKg || initialSleepHours) {
+          const vital = await tx.vital.create({
+            data: {
+              patientId: patient.id,
+              systolic: initialSystolic ? Number(initialSystolic) : undefined,
+              diastolic: initialDiastolic ? Number(initialDiastolic) : undefined,
+              glucose: initialGlucose ? Number(initialGlucose) : undefined,
+              glucoseContext: GlucoseContext.FASTING,
+              weightKg: initialWeightKg ? Number(initialWeightKg) : undefined,
+              sleepHours: initialSleepHours ? Number(initialSleepHours) : undefined,
+              recordedAt: new Date(),
+            },
+          });
+          await tx.patient.update({ where: { id: patient.id }, data: { lastReadingAt: vital.recordedAt } });
+          if (vital.systolic && vital.diastolic) latestBp = { systolic: vital.systolic, diastolic: vital.diastolic };
+          latestGlu = vital.glucose ?? null;
         }
-        latestGlu = vital.glucose ?? null;
-      }
 
-      const birthDate = new Date(dateOfBirth);
-      const age = Math.abs(new Date(Date.now() - birthDate.getTime()).getUTCFullYear() - 1970);
+        const birthDate = new Date(dateOfBirth);
+        const age = Math.abs(new Date(Date.now() - birthDate.getTime()).getUTCFullYear() - 1970);
 
-      return {
-        id: patient.id,
-        doctorId: doctor.id,
-        name: user.name,
-        email: user.email,
-        phone: patient.phone,
-        dateOfBirth: patient.dateOfBirth?.toISOString().slice(0, 10),
-        age,
-        gender: patient.gender,
-        primaryCondition: conditionLabels[0] || 'General Monitoring',
-        conditions: patient.conditions.map((c) => ({ id: c.id, label: c.label })),
-        latestBloodPressure: latestBp,
-        latestGlucose: latestGlu,
-        riskStatus: toLowerRisk(patient.riskStatus),
-        lastReadingAt: patient.lastReadingAt?.toISOString() || null,
-      };
-    });
+        return {
+          id: patient.id,
+          doctorId: doctor.id,
+          name: user.name,
+          email: user.email,
+          phone: patient.phone,
+          dateOfBirth: patient.dateOfBirth?.toISOString().slice(0, 10),
+          age,
+          gender: patient.gender,
+          primaryCondition: conditionLabels[0] || 'General Monitoring',
+          conditions: patient.conditions.map((c) => ({ id: c.id, label: c.label })),
+          latestBloodPressure: latestBp,
+          latestGlucose: latestGlu,
+          riskStatus: toLowerRisk(patient.riskStatus),
+          lastReadingAt: patient.lastReadingAt?.toISOString() || null,
+        };
+      });
 
-    res.status(201).json(result);
+      // Temporary — until the frontend has a way to show this, it's at least in the API
+      // response and the server log, instead of lost entirely.
+      res.status(201).json({ ...result, temporaryPassword: tempPassword });
+    } catch (dbErr) {
+      // Prisma write failed after the Supabase account was created — clean up the orphan
+      // so a retry with the same email doesn't collide with "already exists".
+      await supabaseAdmin.auth.admin.deleteUser(supaUserId).catch(() => {});
+      throw dbErr;
+    }
   } catch (err) {
     next(err);
   }

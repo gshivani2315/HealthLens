@@ -185,6 +185,10 @@ model Alert {
   patient        Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
   acknowledgedBy Doctor? @relation(fields: [acknowledgedById], references: [id], onDelete: SetNull)
 
+  clinicalNote        String?
+  followUpRequestedAt DateTime?
+  followUpNote        String?
+
   @@index([patientId, triggeredAt(sort: Desc)])
   @@index([status, severity])
 }

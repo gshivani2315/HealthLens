@@ -71,30 +71,9 @@ router.post('/logout', (_req, res) => {
 
 router.get('/me', requireAuth, async (req, res, next) => {
   try {
-    const user = await prisma.user.findFirst({
-      where: {
-        OR: [
-          { id: req.user!.sub },
-          { id: req.user!.dbUserId },
-          ...(req.user!.email ? [{ email: req.user!.email }] : []),
-        ],
-      },
-      include: {
-        doctor: true,
-        patient: true,
-      },
-    });
-
+    const user = await prisma.user.findUnique({ where: { id: req.user!.dbUserId } });
     if (!user) return res.status(404).json({ message: 'User not found' });
-
-    res.json({
-      id: user.id,
-      email: user.email,
-      name: user.name,
-      role: user.role.toLowerCase() as 'patient' | 'doctor',
-      clinicName: user.doctor?.clinicName || undefined,
-      phone: user.doctor?.phone || user.patient?.phone || undefined,
-    });
+    res.json({ id: user.id, email: user.email, name: user.name, role: user.role.toLowerCase() as 'patient' | 'doctor' });
   } catch (err) {
     next(err);
   }
