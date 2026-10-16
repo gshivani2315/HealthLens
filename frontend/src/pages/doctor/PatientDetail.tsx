@@ -18,6 +18,9 @@ const ranges: { value: TrendRange; label: string }[] = [
   { value: "90d", label: "90D" },
 ];
 
+// Readings are partial (a submission may have only BP, or only glucose), so show a dash, not "undefined".
+const show = (n?: number | null) => (n === undefined || n === null ? "—" : n);
+
 export default function PatientDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -136,10 +139,14 @@ export default function PatientDetail() {
   }
 
   const { profile, riskStatus, aiClinicalInsight, alertHistory, vitalsLog } = detail;
+
+  // Filter by actual date range (the old slice(0, days) took N *rows*, which with two
+  // submissions a day covered only half the selected range).
   const days = range === "7d" ? 7 : range === "30d" ? 30 : 90;
+  const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
   const points = vitalsLog
-    .slice(0, days)
-    .reverse()
+    .filter((v) => new Date(v.recordedAt).getTime() >= cutoff)
+    .sort((a, b) => new Date(a.recordedAt).getTime() - new Date(b.recordedAt).getTime())
     .map((v) => ({
       date: v.recordedAt,
       systolic: v.systolic,
@@ -169,10 +176,12 @@ export default function PatientDetail() {
             <p className="mt-0.5 text-sm text-ink-400">
               {profile.age} yrs · {profile.gender} · {profile.conditions.map((c) => c.label).join(", ")}
             </p>
-            <p className="text-xs text-ink-400">
-              Assigned Physician: <span className="font-medium text-ink-600">{profile.doctor?.name ?? "Dr. Elena Ruiz"}</span>
-              {profile.doctor?.clinicName && ` (${profile.doctor.clinicName})`}
-            </p>
+            {profile.doctor?.name && (
+              <p className="text-xs text-ink-400">
+                Assigned Physician: <span className="font-medium text-ink-600">{profile.doctor.name}</span>
+                {profile.doctor.clinicName && ` (${profile.doctor.clinicName})`}
+              </p>
+            )}
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -201,6 +210,33 @@ export default function PatientDetail() {
 
       <div className="grid gap-6 lg:grid-cols-3">
         <div className="space-y-6">
+          {/* Contact patient */}
+          <Card>
+            <CardHeader title="Contact patient" />
+            <div className="space-y-2 text-sm">
+              {profile.phone ? (
+                <a
+                  href={`tel:${profile.phone}`}
+                  className="flex items-center justify-between rounded-lg border border-line px-3 py-2 font-medium text-[#214c3b] hover:bg-ink-50"
+                >
+                  <span>{profile.phone}</span>
+                  <span className="text-xs font-semibold">Call</span>
+                </a>
+              ) : (
+                <p className="text-ink-400">No phone number on file.</p>
+              )}
+              {profile.email && (
+                <a
+                  href={`mailto:${profile.email}`}
+                  className="flex items-center justify-between rounded-lg border border-line px-3 py-2 text-ink-600 hover:bg-ink-50"
+                >
+                  <span className="truncate">{profile.email}</span>
+                  <span className="ml-2 text-xs font-semibold">Email</span>
+                </a>
+              )}
+            </div>
+          </Card>
+
           <Card className="border-teal-100 bg-teal-50/40">
             <p className="text-xs font-medium uppercase tracking-wide text-teal-600">Gemini trend analysis</p>
             <p className="mt-2 text-[15px] leading-relaxed text-ink">{aiClinicalInsight.narrative}</p>
@@ -208,7 +244,12 @@ export default function PatientDetail() {
           </Card>
 
           <Card>
-            <CardHeader title="Active alert history" />
+            <div className="flex items-start justify-between">
+              <CardHeader title="Active alert history" />
+              <Link to="/doctor/alerts" className="text-xs font-semibold text-teal-600 hover:underline">
+                Manage in console
+              </Link>
+            </div>
             <ul className="space-y-3">
               {alertHistory.map((a) => (
                 <li key={a.id} className="border-b border-line pb-3 last:border-0 last:pb-0">
@@ -217,7 +258,26 @@ export default function PatientDetail() {
                     <span className="text-xs text-ink-400">{timeAgo(a.triggeredAt)}</span>
                   </div>
                   <p className="mt-1.5 text-sm text-ink">{a.triggerLabel}</p>
-                  {a.clinicalNote && <p className="mt-1 text-xs italic text-ink-400">Note: {a.clinicalNote}</p>}
+                  <p className="mt-0.5 text-xs capitalize text-ink-400">{a.status}</p>
+                  {a.clinicalNote && (
+                    <p className="mt-1 text-xs italic text-ink-500">
+                      Note: {a.clinicalNote}{" "}
+                      <span
+                        className={cx(
+                          "ml-1 rounded px-1.5 py-0.5 align-middle text-[10px] font-semibold not-italic",
+                          a.noteSharedWithPatient ? "bg-teal-50 text-teal-700" : "bg-ink-50 text-ink-500"
+                        )}
+                      >
+                        {a.noteSharedWithPatient ? "Shared with patient" : "Private"}
+                      </span>
+                    </p>
+                  )}
+                  {a.followUp && (
+                    <p className="mt-1 text-xs font-medium text-amber-700">
+                      Visit requested {timeAgo(a.followUp.requestedAt)}
+                      {a.followUp.note ? ` — "${a.followUp.note}"` : ""}
+                    </p>
+                  )}
                 </li>
               ))}
               {alertHistory.length === 0 && <p className="text-sm text-ink-400">No alerts on record.</p>}
@@ -272,11 +332,11 @@ export default function PatientDetail() {
                     <tr key={v.id} className="border-b border-line last:border-0">
                       <td className="px-4 py-2 text-ink-500">{formatDateTime(v.recordedAt)}</td>
                       <td className="px-4 py-2 font-mono tabular text-ink">
-                        {v.systolic}/{v.diastolic}
+                        {v.systolic != null && v.diastolic != null ? `${v.systolic}/${v.diastolic}` : "—"}
                       </td>
-                      <td className="px-4 py-2 font-mono tabular text-ink">{v.glucose}</td>
-                      <td className="px-4 py-2 font-mono tabular text-ink">{v.weightKg}</td>
-                      <td className="px-4 py-2 font-mono tabular text-ink">{v.sleepHours}</td>
+                      <td className="px-4 py-2 font-mono tabular text-ink">{show(v.glucose)}</td>
+                      <td className="px-4 py-2 font-mono tabular text-ink">{show(v.weightKg)}</td>
+                      <td className="px-4 py-2 font-mono tabular text-ink">{show(v.sleepHours)}</td>
                     </tr>
                   ))}
                 </tbody>

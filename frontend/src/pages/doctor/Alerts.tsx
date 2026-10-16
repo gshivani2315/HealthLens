@@ -29,32 +29,59 @@ export default function Alerts() {
   const [status, setStatus] = useState<AlertStatus | "all">("all");
   const [type, setType] = useState<AlertType | "all">("all");
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
   const [noteTarget, setNoteTarget] = useState<AlertItem | null>(null);
   const [note, setNote] = useState("");
+  const [noteShared, setNoteShared] = useState(false);
+  const [followUpTarget, setFollowUpTarget] = useState<AlertItem | null>(null);
+  const [followUpNote, setFollowUpNote] = useState("");
 
   useEffect(() => {
     setLoading(true);
     alertsService.list(status, type).then(setAlerts).finally(() => setLoading(false));
   }, [status, type]);
 
-  async function updateStatus(id: string, next: AlertStatus) {
-    const updated = await alertsService.updateStatus(id, next);
-    setAlerts((prev) => prev.map((a) => (a.id === id ? updated : a)));
-    showToast(next === "acknowledged" ? "Alert acknowledged" : "Alert resolved");
+  function replace(updated: AlertItem) {
+    setAlerts((prev) => prev.map((a) => (a.id === updated.id ? updated : a)));
   }
 
-  async function sendFollowUp(id: string) {
-    await alertsService.sendFollowUp(id);
-    showToast("Follow-up reminder sent to patient");
+  async function updateStatus(id: string, next: AlertStatus) {
+    try {
+      replace(await alertsService.updateStatus(id, next));
+      showToast(next === "acknowledged" ? "Alert marked reviewed" : "Alert resolved");
+    } catch {
+      showToast("Could not update the alert. Please try again.");
+    }
   }
 
   async function saveNote() {
     if (!noteTarget) return;
-    const updated = await alertsService.updateStatus(noteTarget.id, noteTarget.status, note);
-    setAlerts((prev) => prev.map((a) => (a.id === noteTarget.id ? updated : a)));
-    showToast("Clinical note added");
-    setNoteTarget(null);
-    setNote("");
+    setSaving(true);
+    try {
+      replace(await alertsService.saveNote(noteTarget.id, note, noteShared));
+      showToast(noteShared && note.trim() ? "Note saved and shared with patient" : "Private note saved");
+      setNoteTarget(null);
+      setNote("");
+    } catch {
+      showToast("Could not save the note. Please try again.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function saveFollowUp() {
+    if (!followUpTarget) return;
+    setSaving(true);
+    try {
+      replace(await alertsService.sendFollowUp(followUpTarget.id, followUpNote.trim() || undefined));
+      showToast("Follow-up request sent to patient");
+      setFollowUpTarget(null);
+      setFollowUpNote("");
+    } catch {
+      showToast("Could not send the request. Please try again.");
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
@@ -111,7 +138,41 @@ export default function Alerts() {
                     {formatDateTime(a.triggeredAt)} · {a.type === "ai_pattern" ? "AI pattern alert" : "Threshold alert"} ·{" "}
                     <span className="capitalize">{a.status}</span>
                   </p>
-                  {a.clinicalNote && <p className="mt-1 text-xs italic text-ink-500">Note: {a.clinicalNote}</p>}
+                  {(a.patientPhone || a.patientEmail) && (
+                    <p className="mt-1 text-xs text-ink-500">
+                      Contact patient:{" "}
+                      {a.patientPhone && (
+                        <a href={`tel:${a.patientPhone}`} className="font-medium text-[#214c3b] hover:underline">
+                          {a.patientPhone}
+                        </a>
+                      )}
+                      {a.patientPhone && a.patientEmail && " · "}
+                      {a.patientEmail && (
+                        <a href={`mailto:${a.patientEmail}`} className="hover:underline">
+                          {a.patientEmail}
+                        </a>
+                      )}
+                    </p>
+                  )}
+                  {a.clinicalNote && (
+                    <p className="mt-1 text-xs italic text-ink-500">
+                      Note: {a.clinicalNote}{" "}
+                      <span
+                        className={cx(
+                          "ml-1 rounded px-1.5 py-0.5 align-middle text-[10px] font-semibold not-italic",
+                          a.noteSharedWithPatient ? "bg-teal-50 text-teal-700" : "bg-ink-50 text-ink-500"
+                        )}
+                      >
+                        {a.noteSharedWithPatient ? "Shared with patient" : "Private"}
+                      </span>
+                    </p>
+                  )}
+                  {a.followUp && (
+                    <p className="mt-1 text-xs font-medium text-amber-700">
+                      Follow-up requested {formatDateTime(a.followUp.requestedAt)}
+                      {a.followUp.note ? ` — "${a.followUp.note}"` : ""}
+                    </p>
+                  )}
                 </div>
               </div>
               <div className="flex flex-wrap gap-2">
@@ -131,12 +192,20 @@ export default function Alerts() {
                   onClick={() => {
                     setNoteTarget(a);
                     setNote(a.clinicalNote ?? "");
+                    setNoteShared(!!a.noteSharedWithPatient);
                   }}
                 >
-                  Add note
+                  {a.clinicalNote ? "Edit note" : "Add note"}
                 </Button>
-                <Button size="sm" variant="ghost" onClick={() => sendFollowUp(a.id)}>
-                  Follow up
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => {
+                    setFollowUpTarget(a);
+                    setFollowUpNote(a.followUp?.note ?? "");
+                  }}
+                >
+                  {a.followUp ? "Update follow-up" : "Request visit"}
                 </Button>
               </div>
             </Card>
@@ -149,19 +218,59 @@ export default function Alerts() {
         </div>
       )}
 
-      <Modal open={!!noteTarget} onClose={() => setNoteTarget(null)} title="Add clinical note">
+      <Modal open={!!noteTarget} onClose={() => setNoteTarget(null)} title="Clinical note">
         <textarea
           value={note}
           onChange={(e) => setNote(e.target.value)}
           rows={4}
-          className="input mb-4 resize-none"
+          className="input mb-3 resize-none"
           placeholder="e.g. Discussed medication adherence during call…"
         />
+        <label className="mb-1 flex cursor-pointer items-start gap-2 text-sm text-ink">
+          <input
+            type="checkbox"
+            checked={noteShared}
+            onChange={(e) => setNoteShared(e.target.checked)}
+            className="mt-1"
+          />
+          <span>
+            Share this note with the patient
+            <span className="block text-xs text-ink-400">
+              {noteShared
+                ? "The patient will see this note on their dashboard."
+                : "Private: only you and other clinicians can see this note."}
+            </span>
+          </span>
+        </label>
+        <p className="mb-4 text-xs text-ink-400">Saving an empty note removes it.</p>
         <div className="flex justify-end gap-2">
           <Button variant="secondary" onClick={() => setNoteTarget(null)}>
             Cancel
           </Button>
-          <Button onClick={saveNote}>Save note</Button>
+          <Button onClick={saveNote} disabled={saving}>
+            Save note
+          </Button>
+        </div>
+      </Modal>
+
+      <Modal open={!!followUpTarget} onClose={() => setFollowUpTarget(null)} title="Request a follow-up visit">
+        <p className="mb-3 text-sm text-ink-500">
+          The patient will see this request on their dashboard, along with your clinic's contact details.
+        </p>
+        <textarea
+          value={followUpNote}
+          onChange={(e) => setFollowUpNote(e.target.value)}
+          rows={3}
+          className="input mb-4 resize-none"
+          placeholder="e.g. Let's review your BP trend in person this week."
+        />
+        <div className="flex justify-end gap-2">
+          <Button variant="secondary" onClick={() => setFollowUpTarget(null)}>
+            Cancel
+          </Button>
+          <Button onClick={saveFollowUp} disabled={saving}>
+            Send request
+          </Button>
         </div>
       </Modal>
     </div>

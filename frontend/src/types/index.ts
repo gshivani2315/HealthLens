@@ -137,7 +137,7 @@ export interface MetricChange {
 
 export interface DashboardSnapshot {
   patientName: string;
-  doctor: Doctor;
+  doctor: Doctor | null;
   vitalsLoggedToday: boolean;
   metrics: {
     bloodPressure: MetricChange & { systolic: number; diastolic: number };
@@ -169,6 +169,10 @@ export interface AlertItem {
   detail?: string;
   triggeredAt: string; // ISO datetime
   clinicalNote?: string;
+  patientPhone?: string;
+  patientEmail?: string;
+  noteSharedWithPatient?: boolean;
+  followUp?: { requestedAt: string; note?: string } | null;
 }
 
 export interface WeeklySummary {

@@ -1,24 +1,16 @@
-// backend/prisma/seed-week.ts
-// Idempotent "API test" seed: 2 doctors, 2 patients — created in BOTH Supabase Auth and
-// Postgres — plus 7 days of vitals for patient 1.
-// Run from /backend:  npx tsx prisma/seed-week.ts
+// backend/prisma/seed-week.ts   (replaces my earlier version)
+// Test seed for Supabase-only auth: creates REAL Supabase logins, then the matching rows in our DB
+// using the Supabase user id as User.id. Safe to re-run.
 //
-// NOTE: this writes straight to Postgres and does NOT publish Kafka events,
-// so the insight-worker will not react to it. See TESTING.md / the Kafka section
-// in your setup notes for how to trigger that path separately.
+// Run from /backend:  npx tsx prisma/seed-week.ts
+// Does NOT publish Kafka events (the worker won't react to seeded data). See TESTING.md.
 
 import { PrismaClient, Role, RiskStatus, GlucoseContext } from '@prisma/client';
-import { createClient } from '@supabase/supabase-js';
-import 'dotenv/config';
+import { supabaseAdmin } from '../src/lib/supabase';
 
 const prisma = new PrismaClient();
-const supabaseAdmin = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!, {
-  auth: { autoRefreshToken: false, persistSession: false },
-});
-
 const PASSWORD = 'demo1234';
 
-// Deterministic RNG so reruns produce the same shape of data.
 function mulberry32(seed: number) {
   return () => {
     seed |= 0; seed = (seed + 0x6d2b79f5) | 0;
@@ -37,44 +29,55 @@ function atUtc(daysAgo: number, hour: number, minute: number) {
   return d;
 }
 
-// Finds an existing Supabase Auth user by email, or creates one. Returns the Supabase user id,
-// which becomes our Prisma User.id too, so the two systems stay in lockstep.
-async function ensureSupabaseUser(
-  email: string,
-  name: string,
-  role: 'DOCTOR' | 'PATIENT',
-  metadata: Record<string, unknown> = {}
-): Promise<string> {
-  const { data: list, error: listErr } = await supabaseAdmin.auth.admin.listUsers({ page: 1, perPage: 200 });
-  if (listErr) throw listErr;
-  const found = list.users.find((u) => u.email?.toLowerCase() === email.toLowerCase());
-  if (found) return found.id;
-
-  const { data, error } = await supabaseAdmin.auth.admin.createUser({
+/** Creates the Supabase Auth user (role in app_metadata), or finds + resets it if it already exists. */
+async function ensureAuthUser(email: string, name: string, role: 'DOCTOR' | 'PATIENT'): Promise<string> {
+  const created = await supabaseAdmin.auth.admin.createUser({
     email,
     password: PASSWORD,
     email_confirm: true,
-    user_metadata: { name, role, ...metadata },
+    app_metadata: { role },
+    user_metadata: { name },
   });
-  if (error || !data.user) throw error ?? new Error(`Failed to create Supabase user for ${email}`);
-  return data.user.id;
+  if (created.data.user) return created.data.user.id;
+
+  for (let page = 1; page <= 20; page++) {
+    const { data, error } = await supabaseAdmin.auth.admin.listUsers({ page, perPage: 200 });
+    if (error) throw error;
+    const found = data.users.find((u) => u.email?.toLowerCase() === email);
+    if (found) {
+      await supabaseAdmin.auth.admin.updateUserById(found.id, {
+        password: PASSWORD,
+        email_confirm: true,
+        app_metadata: { ...(found.app_metadata ?? {}), role },
+      });
+      return found.id;
+    }
+    if (data.users.length < 200) break;
+  }
+  throw new Error(`Could not create or find Supabase user ${email}: ${created.error?.message}`);
 }
 
-async function upsertUserRow(id: string, email: string, name: string, role: Role) {
+/** Makes our User row's id equal the Supabase id, relinking a row seeded earlier under a different id. */
+async function syncUser(id: string, email: string, name: string, role: Role) {
+  const byEmail = await prisma.user.findUnique({ where: { email } });
+  if (byEmail && byEmail.id !== id) {
+    // Doctor.userId / Patient.userId are ON UPDATE CASCADE (Prisma's default), so their data follows the id change.
+    await prisma.user.update({ where: { id: byEmail.id }, data: { id } });
+  }
   return prisma.user.upsert({
     where: { id },
-    update: { name, role, email },
+    update: { name, role },
     create: { id, email, name, role, password: 'SUPABASE_MANAGED_AUTH' },
   });
 }
 
 async function upsertDoctor(email: string, name: string, clinicName: string, phone: string) {
-  const supaId = await ensureSupabaseUser(email, name, 'DOCTOR', { clinicName, phone });
-  await upsertUserRow(supaId, email, name, Role.DOCTOR);
+  const id = await ensureAuthUser(email, name, 'DOCTOR');
+  const user = await syncUser(id, email, name, Role.DOCTOR);
   return prisma.doctor.upsert({
-    where: { userId: supaId },
+    where: { userId: user.id },
     update: { clinicName, phone },
-    create: { userId: supaId, clinicName, phone },
+    create: { userId: user.id, clinicName, phone },
   });
 }
 
@@ -82,13 +85,13 @@ async function upsertPatient(
   email: string, name: string, doctorId: string,
   extra: { dateOfBirth: Date; gender: string; phone: string; conditions: string[] },
 ) {
-  const supaId = await ensureSupabaseUser(email, name, 'PATIENT');
-  await upsertUserRow(supaId, email, name, Role.PATIENT);
+  const id = await ensureAuthUser(email, name, 'PATIENT');
+  const user = await syncUser(id, email, name, Role.PATIENT);
   const patient = await prisma.patient.upsert({
-    where: { userId: supaId },
-    update: { doctorId },
+    where: { userId: user.id },
+    update: { doctorId, dateOfBirth: extra.dateOfBirth, gender: extra.gender, phone: extra.phone },
     create: {
-      userId: supaId, doctorId, doctorAssignedAt: new Date(),
+      userId: user.id, doctorId, doctorAssignedAt: new Date(),
       dateOfBirth: extra.dateOfBirth, gender: extra.gender, phone: extra.phone,
     },
   });
@@ -103,69 +106,56 @@ async function upsertPatient(
 }
 
 async function main() {
-  // ── Doctors ──
   const doc1 = await upsertDoctor('doctor@healthlens.demo', 'Dr. Meera Rao', 'HealthLens Clinic', '+91-44-5550-0101');
   const doc2 = await upsertDoctor('doctor2@healthlens.demo', 'Dr. Arun Iyer', 'Riverside Care', '+91-44-5550-0202');
 
-  // ── Patients ──
-  // patient1 -> doc1 (main test subject), patient2 -> doc2 (use it to verify 403 / tenant isolation)
   const p1 = await upsertPatient('patient@healthlens.demo', 'Marcus Bell', doc1.id, {
-    dateOfBirth: new Date('1968-04-12'), gender: 'male', phone: '+1-555-0101',
+    dateOfBirth: new Date('1968-04-12'), gender: 'Male', phone: '+1-555-0101',
     conditions: ['Hypertension Stage 1', 'Type 2 Diabetes'],
   });
   const p2 = await upsertPatient('patient2@healthlens.demo', 'Aiko Tanaka', doc2.id, {
-    dateOfBirth: new Date('1975-09-30'), gender: 'female', phone: '+81-555-0202',
+    dateOfBirth: new Date('1975-09-30'), gender: 'Female', phone: '+81-555-0202',
     conditions: ['Prediabetes'],
   });
 
-  // ── 7 days of vitals for patient1 (idempotent: wipe + recreate) ──
+  // ── 7 days of vitals for patient 1 ──
   await prisma.vital.deleteMany({ where: { patientId: p1.id } });
-
   const rows: any[] = [];
   for (let d = 6; d >= 0; d--) {
-    const progress = (6 - d) / 6; // 0 -> 1 across the week
-    // Systolic creeps up ~138 -> ~152: below the 160/100 threshold, but a visible upward trend.
+    const progress = (6 - d) / 6;
     const sys = Math.round(jitter(138 + progress * 14, 3));
     const dia = Math.round(jitter(86 + progress * 8, 2));
-
-    // Morning submission: BP + HR + weight + sleep + fasting glucose (07:30 IST = 02:00 UTC)
     rows.push({
-      patientId: p1.id,
-      systolic: sys, diastolic: dia,
-      heartRate: Math.round(jitter(74, 4)),
+      patientId: p1.id, systolic: sys, diastolic: dia, heartRate: Math.round(jitter(74, 4)),
       weightKg: Number(jitter(84.0 + progress * 0.8, 0.2).toFixed(1)),
       sleepHours: Number(jitter(6.8 - progress * 0.8, 0.4).toFixed(1)),
-      glucose: Math.round(jitter(112 + progress * 10, 5)),
-      glucoseContext: GlucoseContext.FASTING,
+      glucose: Math.round(jitter(112 + progress * 10, 5)), glucoseContext: GlucoseContext.FASTING,
       recordedAt: atUtc(d, 2, 0),
     });
-    // Evening submission: BP + post-meal glucose (20:00 IST = 14:30 UTC)
     rows.push({
       patientId: p1.id,
       systolic: Math.round(jitter(sys + 4, 3)), diastolic: Math.round(jitter(dia + 2, 2)),
-      glucose: Math.round(jitter(150 + progress * 15, 8)),
-      glucoseContext: GlucoseContext.POST_MEAL,
+      glucose: Math.round(jitter(150 + progress * 15, 8)), glucoseContext: GlucoseContext.POST_MEAL,
       recordedAt: atUtc(d, 14, 30),
     });
   }
   await prisma.vital.createMany({ data: rows });
 
-  // ── 3 days for patient2 ──
+  // ── 3 days for patient 2 ──
   await prisma.vital.deleteMany({ where: { patientId: p2.id } });
-  const rows2 = [2, 1, 0].map((d) => ({
-    patientId: p2.id,
-    systolic: Math.round(jitter(118, 4)), diastolic: Math.round(jitter(76, 3)),
-    glucose: Math.round(jitter(98, 5)), glucoseContext: GlucoseContext.FASTING,
-    weightKg: Number(jitter(62, 0.3).toFixed(1)), sleepHours: Number(jitter(7.4, 0.3).toFixed(1)),
-    heartRate: Math.round(jitter(68, 3)), recordedAt: atUtc(d, 2, 0),
-  }));
-  await prisma.vital.createMany({ data: rows2 });
+  await prisma.vital.createMany({
+    data: [2, 1, 0].map((d) => ({
+      patientId: p2.id,
+      systolic: Math.round(jitter(118, 4)), diastolic: Math.round(jitter(76, 3)),
+      glucose: Math.round(jitter(98, 5)), glucoseContext: GlucoseContext.FASTING,
+      weightKg: Number(jitter(62, 0.3).toFixed(1)), sleepHours: Number(jitter(7.4, 0.3).toFixed(1)),
+      heartRate: Math.round(jitter(68, 3)), recordedAt: atUtc(d, 2, 0),
+    })),
+  });
 
-  // ── Roster-maintained fields (normally set by the API/worker) ──
   await prisma.patient.update({ where: { id: p1.id }, data: { riskStatus: RiskStatus.MODERATE, lastReadingAt: atUtc(0, 14, 30) } });
   await prisma.patient.update({ where: { id: p2.id }, data: { riskStatus: RiskStatus.NORMAL, lastReadingAt: atUtc(0, 2, 0) } });
 
-  // ── One weekly summary for patient1 (weekStart stored at 12:00Z per schema comment) ──
   const weekStart = new Date(); weekStart.setUTCDate(weekStart.getUTCDate() - 7); weekStart.setUTCHours(12, 0, 0, 0);
   const weekEnd = new Date(weekStart); weekEnd.setUTCDate(weekEnd.getUTCDate() + 6);
   await prisma.weeklySummary.upsert({
@@ -181,13 +171,12 @@ async function main() {
 
   const latest = await prisma.vital.findFirst({ where: { patientId: p1.id }, orderBy: { recordedAt: 'desc' } });
 
-  console.log('\n✅ Seed complete. Password for all accounts:', PASSWORD);
-  console.log('   (Each account now also exists in Supabase → Authentication → Users.)\n');
-  console.log('Doctor 1  :', 'doctor@healthlens.demo', ' doctorId =', doc1.id);
-  console.log('Doctor 2  :', 'doctor2@healthlens.demo', ' doctorId =', doc2.id);
-  console.log('Patient 1 :', 'patient@healthlens.demo', ' patientId =', p1.id, '(assigned to Doctor 1)');
-  console.log('Patient 2 :', 'patient2@healthlens.demo', ' patientId =', p2.id, '(assigned to Doctor 2)');
-  console.log('Latest patient1 vitalId (use in Kafka manual test):', latest?.id, '\n');
+  console.log('\n✅ Seed complete. These are REAL Supabase logins. Password for all:', PASSWORD);
+  console.log('Doctor 1  : doctor@healthlens.demo    doctorId =', doc1.id);
+  console.log('Doctor 2  : doctor2@healthlens.demo   doctorId =', doc2.id);
+  console.log('Patient 1 : patient@healthlens.demo   patientId =', p1.id, '(Doctor 1)');
+  console.log('Patient 2 : patient2@healthlens.demo  patientId =', p2.id, '(Doctor 2)');
+  console.log('Latest patient1 vitalId (for manual Kafka tests):', latest?.id, '\n');
 }
 
 main().catch((e) => { console.error(e); process.exit(1); }).finally(() => prisma.$disconnect());

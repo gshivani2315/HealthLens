@@ -1,21 +1,20 @@
+// frontend/src/services/apiClient.ts   (replaces current)
 // ---------------------------------------------------------------------------
-// Thin fetch wrapper. This is the ONLY file that needs to know how requests
-// are made — every service module calls through `apiClient`, so once the
-// backend is live, swapping VITE_USE_MOCKS to "false" in .env is enough to
-// point the whole app at real endpoints. No component ever calls fetch()
-// directly.
+// Thin fetch wrapper. Every service goes through `apiClient`.
 //
-// Expected backend contract:
-//   - Base URL comes from VITE_API_BASE_URL (e.g. http://localhost:4000/api)
-//   - Auth: send `Authorization: Bearer <token>` on every request after login
-//   - Errors: return a JSON body `{ message: string }` with a 4xx/5xx status
+// Auth: sends `Authorization: Bearer <access token>`. Supabase access tokens last about an hour,
+// so on a 401 it silently exchanges the refresh token (POST /auth/refresh) ONCE and retries the
+// original request. If that fails, it ends the session and fires SESSION_EXPIRED_EVENT so the
+// AuthContext can send the user back to the login page.
 // ---------------------------------------------------------------------------
 
-import { TOKEN_STORAGE_KEY } from "@/lib/constants";
+import { REFRESH_TOKEN_STORAGE_KEY, TOKEN_STORAGE_KEY, USER_STORAGE_KEY } from "@/lib/constants";
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:4000/api";
 
 export const USE_MOCKS = import.meta.env.VITE_USE_MOCKS !== "false";
+
+export const SESSION_EXPIRED_EVENT = "healthlens:session-expired";
 
 export class ApiError extends Error {
   status: number;
@@ -36,10 +35,11 @@ interface RequestOptions {
   signal?: AbortSignal;
 }
 
-export async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  const token = getToken();
+// A 401 from these is a real answer (wrong password, expired refresh token), not a stale access token.
+const NO_REFRESH_PATHS = ["/auth/login", "/auth/register", "/auth/register-doctor", "/auth/refresh"];
 
-  const res = await fetch(`${BASE_URL}${path}`, {
+function send(path: string, options: RequestOptions, token: string | null): Promise<Response> {
+  return fetch(`${BASE_URL}${path}`, {
     method: options.method || "GET",
     headers: {
       "Content-Type": "application/json",
@@ -48,6 +48,57 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
     body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
     signal: options.signal,
   });
+}
+
+async function doRefresh(): Promise<boolean> {
+  const refreshToken = localStorage.getItem(REFRESH_TOKEN_STORAGE_KEY);
+  if (!refreshToken) return false;
+  try {
+    const res = await fetch(`${BASE_URL}/auth/refresh`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ refreshToken }),
+    });
+    if (!res.ok) return false;
+    const data = await res.json();
+    localStorage.setItem(TOKEN_STORAGE_KEY, data.token);
+    // Supabase rotates refresh tokens: the old one is now dead, so always store the new one.
+    if (data.refreshToken) localStorage.setItem(REFRESH_TOKEN_STORAGE_KEY, data.refreshToken);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Single flight: if several requests 401 at once, they share ONE refresh. Rotating tokens would
+// otherwise make the second refresh attempt fail and log the user out.
+let refreshInFlight: Promise<boolean> | null = null;
+function refreshSession(): Promise<boolean> {
+  if (!refreshInFlight) {
+    refreshInFlight = doRefresh().finally(() => {
+      refreshInFlight = null;
+    });
+  }
+  return refreshInFlight;
+}
+
+function endSession() {
+  localStorage.removeItem(TOKEN_STORAGE_KEY);
+  localStorage.removeItem(REFRESH_TOKEN_STORAGE_KEY);
+  localStorage.removeItem(USER_STORAGE_KEY);
+  window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT));
+}
+
+export async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  let res = await send(path, options, getToken());
+
+  if (res.status === 401 && !NO_REFRESH_PATHS.some((p) => path.startsWith(p))) {
+    if (await refreshSession()) {
+      res = await send(path, options, getToken());
+    } else {
+      endSession();
+    }
+  }
 
   if (!res.ok) {
     let message = `Request failed with status ${res.status}`;
@@ -55,7 +106,7 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
       const data = await res.json();
       if (data?.message) message = data.message;
     } catch {
-      // response had no JSON body — keep the generic message
+      // response had no JSON body, keep the generic message
     }
     throw new ApiError(message, res.status);
   }

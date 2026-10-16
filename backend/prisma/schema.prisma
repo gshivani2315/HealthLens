@@ -175,6 +175,9 @@ model Alert {
   vitalId        String? // reading that triggered it (threshold alerts)
   dedupeKey      String        @unique // makes Kafka redelivery + retries idempotent
   clinicalNote   String?
+  noteSharedWithPatient Boolean   @default(false)
+  followUpRequestedAt   DateTime?
+  followUpNote          String?
   triggeredAt    DateTime      @default(now())
   acknowledgedAt DateTime?
   acknowledgedById String?
@@ -184,10 +187,6 @@ model Alert {
 
   patient        Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
   acknowledgedBy Doctor? @relation(fields: [acknowledgedById], references: [id], onDelete: SetNull)
-
-  clinicalNote        String?
-  followUpRequestedAt DateTime?
-  followUpNote        String?
 
   @@index([patientId, triggeredAt(sort: Desc)])
   @@index([status, severity])

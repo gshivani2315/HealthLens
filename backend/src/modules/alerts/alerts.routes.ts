@@ -1,29 +1,33 @@
+// backend/src/modules/alerts/alerts.routes.ts  (replaces the previous version)
 import { Router } from 'express';
 import { prisma } from '../../db';
 import { requireAuth, requireRole } from '../../middleware/auth';
 import { AlertStatus, AlertType } from '@prisma/client';
+import { alertForDoctor } from './alertSerializer';
 
 const router = Router();
 
-function toLowerSeverity(sev: string): 'info' | 'caution' | 'critical' {
-  switch (sev.toUpperCase()) {
-    case 'CRITICAL': return 'critical';
-    case 'CAUTION': return 'caution';
-    default: return 'info';
-  }
+async function resolveDoctor(user: any) {
+  return prisma.doctor.findFirst({
+    where: { OR: [{ userId: user.sub }, { userId: user.dbUserId }, { id: user.sub }] },
+  });
 }
 
-function toLowerStatus(status: string): 'unread' | 'acknowledged' | 'resolved' {
-  switch (status.toUpperCase()) {
-    case 'ACKNOWLEDGED': return 'acknowledged';
-    case 'RESOLVED': return 'resolved';
-    default: return 'unread';
-  }
+// Loads an alert and verifies it belongs to one of this doctor's patients.
+async function loadOwnedAlert(id: string, user: any) {
+  const doctor = await resolveDoctor(user);
+  if (!doctor) return { error: 403 as const };
+
+  const alert = await prisma.alert.findUnique({
+    where: { id },
+    include: { patient: { include: { user: true } } },
+  });
+  if (!alert) return { error: 404 as const };
+  if (alert.patient.doctorId !== doctor.id) return { error: 403 as const };
+  return { alert, doctor };
 }
 
-function toLowerType(type: string): 'threshold' | 'ai_pattern' {
-  return type.toUpperCase() === 'AI_PATTERN' ? 'ai_pattern' : 'threshold';
-}
+const includePatient = { patient: { include: { user: true } } };
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /alerts?status=&type=
@@ -33,21 +37,10 @@ router.get('/', requireAuth, requireRole('DOCTOR'), async (req, res, next) => {
     const statusQuery = (req.query.status as string) || '';
     const typeQuery = (req.query.type as string) || '';
 
-    const doctor = await prisma.doctor.findFirst({
-      where: {
-        OR: [
-          { userId: req.user!.sub },
-          { userId: req.user!.dbUserId },
-          { id: req.user!.sub },
-        ],
-      },
-    });
+    const doctor = await resolveDoctor(req.user);
+    if (!doctor) return res.status(403).json({ message: 'Doctor profile not found' });
 
-    const where: any = {};
-
-    if (doctor) {
-      where.patient = { doctorId: doctor.id };
-    }
+    const where: any = { patient: { doctorId: doctor.id } };
 
     if (statusQuery && statusQuery !== 'all') {
       const s = statusQuery.toUpperCase();
@@ -64,115 +57,89 @@ router.get('/', requireAuth, requireRole('DOCTOR'), async (req, res, next) => {
 
     const alerts = await prisma.alert.findMany({
       where,
-      include: {
-        patient: {
-          include: { user: true },
-        },
-      },
+      include: includePatient,
       orderBy: { triggeredAt: 'desc' },
     });
 
-    res.json(
-      alerts.map((a) => ({
-        id: a.id,
-        patientId: a.patientId,
-        patientName: a.patient.user.name,
-        type: toLowerType(a.type),
-        severity: toLowerSeverity(a.severity),
-        status: toLowerStatus(a.status),
-        triggerLabel: a.triggerLabel,
-        detail: a.detail ?? undefined,
-        triggeredAt: a.triggeredAt.toISOString(),
-        clinicalNote: a.clinicalNote ?? undefined,
-      }))
-    );
+    res.json(alerts.map(alertForDoctor));
   } catch (err) {
     next(err);
   }
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PATCH /alerts/:id
+// PATCH /alerts/:id   { status?, clinicalNote?, noteSharedWithPatient? }
 // ─────────────────────────────────────────────────────────────────────────────
 router.patch('/:id', requireAuth, requireRole('DOCTOR'), async (req, res, next) => {
   try {
-    const { id } = req.params;
-    const { status, clinicalNote } = req.body ?? {};
-
-    const doctor = await prisma.doctor.findFirst({
-      where: {
-        OR: [
-          { userId: req.user!.sub },
-          { userId: req.user!.dbUserId },
-          { id: req.user!.sub },
-        ],
-      },
-    });
+    const owned = await loadOwnedAlert(req.params.id, req.user);
+    if ('error' in owned) {
+      return res.status(owned.error).json({ message: owned.error === 404 ? 'Alert not found' : 'Forbidden' });
+    }
+    const { doctor } = owned;
+    const { status, clinicalNote, noteSharedWithPatient } = req.body ?? {};
 
     let alertStatus: AlertStatus | undefined;
-    if (status) {
-      const s = status.toUpperCase();
+    if (status !== undefined) {
+      const s = String(status).toUpperCase();
       if (s === 'ACKNOWLEDGED') alertStatus = AlertStatus.ACKNOWLEDGED;
       else if (s === 'RESOLVED') alertStatus = AlertStatus.RESOLVED;
       else if (s === 'UNREAD') alertStatus = AlertStatus.UNREAD;
+      else return res.status(400).json({ message: 'Invalid status' });
     }
 
+    // Note handling: an empty note clears it and always makes it private again.
+    const noteProvided = clinicalNote !== undefined;
+    const cleanedNote = noteProvided ? String(clinicalNote).trim() || null : undefined;
+    let shared: boolean | undefined;
+    if (typeof noteSharedWithPatient === 'boolean') shared = noteSharedWithPatient;
+    if (noteProvided && cleanedNote === null) shared = false;
+
+    // Only stamp acknowledged/resolved times on a real transition.
+    const changed = alertStatus !== undefined && alertStatus !== owned.alert.status;
+
     const updated = await prisma.alert.update({
-      where: { id },
+      where: { id: owned.alert.id },
       data: {
         ...(alertStatus ? { status: alertStatus } : {}),
-        ...(alertStatus === AlertStatus.ACKNOWLEDGED
-          ? {
-              acknowledgedAt: new Date(),
-              ...(doctor ? { acknowledgedById: doctor.id } : {}),
-            }
+        ...(changed && alertStatus === AlertStatus.ACKNOWLEDGED
+          ? { acknowledgedAt: new Date(), acknowledgedById: doctor.id }
           : {}),
-        ...(alertStatus === AlertStatus.RESOLVED ? { resolvedAt: new Date() } : {}),
-        ...(clinicalNote !== undefined ? { clinicalNote } : {}),
+        ...(changed && alertStatus === AlertStatus.RESOLVED ? { resolvedAt: new Date() } : {}),
+        ...(noteProvided ? { clinicalNote: cleanedNote } : {}),
+        ...(shared !== undefined ? { noteSharedWithPatient: shared } : {}),
       },
-      include: {
-        patient: {
-          include: { user: true },
-        },
-      },
+      include: includePatient,
     });
 
-    res.json({
-      id: updated.id,
-      patientId: updated.patientId,
-      patientName: updated.patient.user.name,
-      type: toLowerType(updated.type),
-      severity: toLowerSeverity(updated.severity),
-      status: toLowerStatus(updated.status),
-      triggerLabel: updated.triggerLabel,
-      detail: updated.detail ?? undefined,
-      triggeredAt: updated.triggeredAt.toISOString(),
-      clinicalNote: updated.clinicalNote ?? undefined,
-    });
+    res.json(alertForDoctor(updated));
   } catch (err) {
     next(err);
   }
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// POST /alerts/:id/follow-up
+// POST /alerts/:id/follow-up   { note? }  -> updated AlertItem
+// The follow-up note is ALWAYS patient-visible (it's a message to the patient).
 // ─────────────────────────────────────────────────────────────────────────────
 router.post('/:id/follow-up', requireAuth, requireRole('DOCTOR'), async (req, res, next) => {
   try {
-    const { id } = req.params;
-
-    const alert = await prisma.alert.findUnique({
-      where: { id },
-      include: { patient: { include: { user: true } } },
-    });
-
-    if (!alert) {
-      return res.status(404).json({ message: 'Alert not found' });
+    const owned = await loadOwnedAlert(req.params.id, req.user);
+    if ('error' in owned) {
+      return res.status(owned.error).json({ message: owned.error === 404 ? 'Alert not found' : 'Forbidden' });
     }
 
-    console.log(`[Follow-up] Follow-up reminder triggered for patient ${alert.patient.user.name} (${alert.patientId}) on alert ${alert.id}`);
+    const note = typeof req.body?.note === 'string' ? req.body.note.trim() : '';
 
-    res.status(204).send();
+    const updated = await prisma.alert.update({
+      where: { id: owned.alert.id },
+      data: { followUpRequestedAt: new Date(), followUpNote: note || null },
+      include: includePatient,
+    });
+
+    console.log(`[Follow-up] requested for patient ${updated.patient.user.name} (${updated.patientId}) on alert ${updated.id}`);
+
+    res.json(alertForDoctor(updated));
   } catch (err) {
     next(err);
   }

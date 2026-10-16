@@ -3,6 +3,7 @@ import { prisma } from '../../db';
 import { requireAuth } from '../../middleware/auth';
 import { publishVitalLoggedEvent } from '../../kafka/producer';
 import { GlucoseContext } from '@prisma/client';
+import { alertForDoctor, alertForPatient } from '../alerts/alertSerializer';
 
 const router = Router();
 
@@ -275,12 +276,22 @@ router.get('/:id/dashboard', requireAuth, async (req, res, next) => {
 
     res.json({
       patientName: patient.user.name,
-      doctor: {
-        id: patient.doctor?.id ?? 'doc_001',
-        name: patient.doctor?.user?.name ?? 'Dr. Elena Ruiz',
-        clinicName: patient.doctor?.clinicName ?? 'Meridian Family Health',
-        email: patient.doctor?.user?.email ?? 'doctor@healthlens.demo',
-      },
+      // doctor: {
+      //   id: patient.doctor?.id ?? 'doc_001',
+      //   name: patient.doctor?.user?.name ?? 'Dr. Elena Ruiz',
+      //   clinicName: patient.doctor?.clinicName ?? 'Meridian Family Health',
+      //   email: patient.doctor?.user?.email ?? 'doctor@healthlens.demo',
+      // }, 
+      doctor: patient.doctor
+        ? {
+            id: patient.doctor.id,
+            name: patient.doctor.user?.name ?? 'Your doctor',
+            clinicName: patient.doctor.clinicName ?? '',
+            phone: patient.doctor.phone ?? undefined,
+            email: patient.doctor.user?.email ?? '',
+            assignedDate: patient.doctorAssignedAt?.toISOString(),
+          }
+        : null,
       vitalsLoggedToday: isToday,
       metrics: {
         bloodPressure: {
@@ -316,16 +327,17 @@ router.get('/:id/dashboard', requireAuth, async (req, res, next) => {
             summary: patient.insight.narrative,
           }
         : null,
-      recentAlerts: alerts.map((a) => ({
-        id: a.id,
-        patientId: a.patientId,
-        type: toLowerType(a.type),
-        severity: toLowerSeverity(a.severity),
-        status: toLowerStatus(a.status),
-        triggerLabel: a.triggerLabel,
-        detail: a.detail ?? undefined,
-        triggeredAt: a.triggeredAt.toISOString(),
-      })),
+      // recentAlerts: alerts.map((a) => ({
+      //   id: a.id,
+      //   patientId: a.patientId,
+      //   type: toLowerType(a.type),
+      //   severity: toLowerSeverity(a.severity),
+      //   status: toLowerStatus(a.status),
+      //   triggerLabel: a.triggerLabel,
+      //   detail: a.detail ?? undefined,
+      //   triggeredAt: a.triggeredAt.toISOString(),
+      // }))
+      recentAlerts: alerts.map(req.user!.role === 'DOCTOR' ? alertForDoctor : alertForPatient),
       sparkline,
     });
   } catch (err) {
@@ -550,19 +562,21 @@ router.get('/:id/alerts/history', requireAuth, async (req, res, next) => {
       orderBy: { triggeredAt: 'desc' },
     });
 
-    res.json(
-      alerts.map((a) => ({
-        id: a.id,
-        patientId: a.patientId,
-        type: toLowerType(a.type),
-        severity: toLowerSeverity(a.severity),
-        status: toLowerStatus(a.status),
-        triggerLabel: a.triggerLabel,
-        detail: a.detail ?? undefined,
-        triggeredAt: a.triggeredAt.toISOString(),
-        clinicalNote: a.clinicalNote ?? undefined,
-      }))
-    );
+    // res.json(
+    //   alerts.map((a) => ({
+    //     id: a.id,
+    //     patientId: a.patientId,
+    //     type: toLowerType(a.type),
+    //     severity: toLowerSeverity(a.severity),
+    //     status: toLowerStatus(a.status),
+    //     triggerLabel: a.triggerLabel,
+    //     detail: a.detail ?? undefined,
+    //     triggeredAt: a.triggeredAt.toISOString(),
+    //     clinicalNote: a.clinicalNote ?? undefined,
+    //   }))
+    // );
+    const serialize = req.user!.role === 'DOCTOR' ? alertForDoctor : alertForPatient;
+    res.json(alerts.map(serialize));
   } catch (err) {
     next(err);
   }
