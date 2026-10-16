@@ -1,341 +1,541 @@
-# HealthLens — Developer & AI Agent Handoff Packet
+# HealthLens — Architecture Reference
 
-Welcome to **HealthLens**! This handoff document is tailored for incoming teammates and AI agents to get completely up to speed on the system architecture, file layout, data contracts, and workflows across the entire platform.
-
----
-
-## 1. High-Level Architecture
-
-HealthLens is a remote patient-monitoring and clinical intelligence application organized into three primary layers:
-
-```
-┌────────────────────────────────────────────────────────┐
-│                    INTERACTION                         │
-│   frontend/ (Vite + React 18 + Tailwind + Recharts)    │
-│   • Patient Portal: Daily vitals logging, trend charts │
-│   • Doctor Portal: Patient roster, triage & alerts     │
-└───────────────────────────┬────────────────────────────┘
-                            │ HTTP (REST + Bearer JWT)
-                            ▼
-┌────────────────────────────────────────────────────────┐
-│                    APPLICATION                         │
-│      backend/ (Node.js + Express + Prisma ORM)         │
-│   • Auth (Supabase Auth / JWT + bcrypt fallback)       │
-│   • PostgreSQL / Supabase storage & ownership guards   │
-│   • Publishes 'vitals.logged' events to Kafka          │
-└───────────────────────────┬────────────────────────────┘
-                            │ Event Stream (Kafka topic: vitals.logged)
-                            ▼
-┌────────────────────────────────────────────────────────┐
-│                    INTELLIGENCE                        │
-│        insight-worker/ (Node.js Background Daemon)     │
-│   • Consumes vitals.logged events (FIFO per patient)   │
-│   • Clinical rule evaluation (hard bounds & trends)    │
-│   • Google Gemini API calls (narratives & insights)    │
-│   • Writes Alerts & WeeklySummaries back to Postgres   │
-└────────────────────────────────────────────────────────┘
-```
+> Generated: 2026-10-16. Single source of truth for structure, APIs, schema, and design decisions.
 
 ---
 
-## 2. Repository File Layout
+## 1. What is HealthLens?
+
+HealthLens is a **chronic-disease remote monitoring platform** that connects patients with their assigned physician. Patients log daily vitals (blood pressure, glucose, weight, sleep). An AI-assisted backend continuously analyses those readings, fires threshold alerts, and generates weekly plain-language health summaries. Doctors get a real-time dashboard showing their entire patient roster, risk tiers, and actionable alerts.
+
+### Target Users
+
+| Persona | Description |
+|---|---|
+| **Patient** | A person with one or more chronic conditions (hypertension, diabetes, heart disease). Logs vitals daily from a mobile browser or desktop. Reads AI-generated weekly summaries and sees alerts their doctor has shared. |
+| **Doctor / Clinician** | A physician or clinic that manages a panel of patients. Reviews the roster for at-risk patients, sets per-patient alert thresholds, adds clinical notes to alerts, and registers new patients. |
+
+### Core Value Propositions
+- **Proactive alerting** — deterministic threshold rules fire before the patient even calls the clinic.
+- **AI trend analysis** — Gemini scans multi-week BP/glucose patterns and writes a plain-English clinical narrative.
+- **Zero-friction patient onboarding** — doctor creates the patient account; the patient gets a temporary password to log in immediately.
+- **Role-scoped data** — patients see only their own data; doctors see only their assigned patients.
+
+---
+
+## 2. High-Level Architecture
+
+```mermaid
+flowchart LR
+    FE["Frontend\n(React + Vite)\nlocalhost:5173"]
+    BE["Backend API\n(Express + Prisma)\nlocalhost:4000"]
+    IW["Insight Worker\n(KafkaJS + Gemini)"]
+    DB["Supabase Postgres\n(shared schema)"]
+    SUPA["Supabase Auth\n(identity provider)"]
+    KAFKA["Apache Kafka\nvitals.logged topic"]
+    GEMINI["Google Gemini API\nFlash 2.0"]
+
+    FE -->|"REST /api/*\nBearer JWT"| BE
+    BE -->|"Prisma ORM"| DB
+    BE -->|"Admin REST API"| SUPA
+    SUPA -->|"JWT validation"| BE
+    BE -->|"Publish event"| KAFKA
+    KAFKA -->|"Consume event"| IW
+    IW -->|"Prisma ORM"| DB
+    IW -->|"generateContent"| GEMINI
+```
+
+### Component Summary
+
+| Component | Tech | Port | Responsibility |
+|---|---|---|---|
+| **frontend** | React 18, Vite, Tailwind CSS | 5173 | UI for both patient and doctor |
+| **backend** | Express, Prisma, TypeScript | 4000 | REST API, auth, patient CRUD |
+| **insight-worker** | KafkaJS, Prisma, Google Gemini | — | Event consumer, rules engine, AI analysis |
+| **Supabase** | Hosted Postgres + Auth | — | Database + identity provider |
+| **Kafka** | Apache Kafka | 9092 | Async event bus (vitals pipeline) |
+
+---
+
+## 3. Monorepo File Structure
 
 ```
-healthlens/
-├── docker-compose.yml              # Local Kafka container (apache/kafka:3.9.0 on :9092)
-├── README.md                       # High-level repo summary
-├── handoff.md                      # This handoff packet
+HealthLens/
+├── package.json                    # Root workspace
 │
-├── frontend/                       # Client SPA
-│   ├── package.json                # React 18, Vite 5, Recharts 2, Tailwind 3
-│   ├── vite.config.ts              # Alias @ -> src, port 5173
-│   ├── tailwind.config.js          # Custom theme: ink, paper, teal, brick, amber, moss
-│   └── src/
-│       ├── main.tsx                # App root & BrowserRouter mount
-│       ├── App.tsx                 # Route tree & ProtectedRoute role gating
-│       ├── types/index.ts          # Unified TypeScript domain interfaces
-│       ├── context/
-│       │   ├── AuthContext.tsx     # Session management (login, registerDoctor, logout)
-│       │   └── ToastContext.tsx    # Toast notification system
-│       ├── routes/
-│       │   └── ProtectedRoute.tsx  # Role-based route guard ('patient' | 'doctor')
-│       ├── services/
-│       │   ├── apiClient.ts        # Unified fetch wrapper with USE_MOCKS switch
-│       │   ├── mockData.ts         # In-memory realistic seed generators (4-week AI summaries for all seeded patients)
-│       │   ├── authService.ts      # Auth network calls (login, registerDoctor, logout, updatePassword)
-│       │   ├── vitalsService.ts    # Telemetry and logging calls
-│       │   ├── patientsService.ts  # Patient profile & roster calls, add patient, doctor profile view/update
-│       │   ├── doctorService.ts    # Doctor overview calls
-│       │   ├── alertsService.ts    # Alert console actions
-│       │   └── thresholdsService.ts# Threshold get/save calls
-│       ├── pages/
-│       │   ├── LoginPage.tsx       # Sign In & Doctor Registration toggle tabs
-│       │   ├── patient/            # Dashboard, LogVitals, Trends, Insights, Profile, Settings
-│       │   └── doctor/             # Dashboard, PatientDetail, Alerts, Thresholds, Profile, Settings
-│       └── components/             # Reusable UI, layout (UserMenu, DoctorLayout, PatientLayout) & chart components
-│
-├── backend/                        # REST API Application
-│   ├── package.json                # Express 4, Prisma 6, bcrypt, kafkajs, jsonwebtoken
-│   ├── tsconfig.json               # ES2020, commonjs, dist output
+├── backend/
+│   ├── .env.example
 │   ├── prisma/
-│   │   ├── schema.prisma           # Postgres/Supabase database schema
-│   │   └── seed.ts                 # Database seed (doctor, 3 patients with 30d vitals & 4-week weekly summaries)
+│   │   └── schema.prisma           # Single source of truth for DB schema
+│   ├── reset.ts                    # Dev script: provision Supabase demo accounts
 │   └── src/
-│       ├── server.ts               # HTTP server entrypoint
-│       ├── app.ts                  # Express app setup, CORS, JSON body, route mounting
-│       ├── config.ts               # Env parsing (PORT, JWT_SECRET, SUPABASE_*, KAFKA_BROKER)
-│       ├── db/index.ts             # Prisma client singleton
+│       ├── server.ts               # Entry point (listen + graceful shutdown)
+│       ├── app.ts                  # createApp() — mounts middleware + routers
+│       ├── config.ts               # Env-var loading (Supabase keys, port, Kafka)
+│       ├── db/
+│       │   └── index.ts            # Prisma client singleton
 │       ├── kafka/
-│       │   └── producer.ts         # Kafka producer & publishVitalLoggedEvent() helper
+│       │   └── producer.ts         # publishVitalLoggedEvent()
 │       ├── lib/
-│       │   └── jwt.ts              # Token signing & Supabase/custom JWT verification
+│       │   ├── supabase.ts         # supabaseAdmin (Supabase JS client, service role)
+│       │   ├── supabaseAuth.ts     # supabaseLogin / supabaseGetUser / adminCreateUser
+│       │   ├── jwt.ts              # Legacy signToken/verifyToken (not used for auth)
+│       │   └── provision.ts        # Dev helper: ensure demo users exist
 │       ├── middleware/
-│       │   ├── auth.ts             # requireAuth (with auto-provisioning) & requireRole
-│       │   └── errorHandler.ts     # Global JSON error formatter
+│       │   ├── auth.ts             # requireAuth (Supabase token → req.user), requireRole
+│       │   ├── errorHandler.ts     # Global Express error handler
+│       │   └── requireRole.ts      # Standalone role guard (used in alerts routes)
 │       └── modules/
-│           ├── auth/               # /api/auth (login, register-doctor, me, password, logout)
-│           ├── patients/           # /api/patients (profile, dashboard, vitals, logs)
-│           ├── doctor/             # /api/doctor (overview, roster, add patient, detail, thresholds, profile)
-│           └── alerts/             # /api/alerts (list, status patch, follow-up)
+│           ├── auth/
+│           │   ├── auth.routes.ts  # /auth/*
+│           │   └── auth.service.ts # login(), registerDoctor(), refresh(), changePassword()
+│           ├── doctor/
+│           │   └── doctor.routes.ts # /doctor/*
+│           ├── patients/
+│           │   └── patients.routes.ts # /patients/*
+│           └── alerts/
+│               ├── alerts.routes.ts   # /alerts/*
+│               └── alertSerializer.ts # alertForDoctor() / alertForPatient()
 │
-└── insight-worker/                 # Intelligence Daemon
-    ├── package.json                # @google/genai, kafkajs, node-cron, zod, prisma
-    ├── scripts/sync-schema.js      # Copies schema.prisma from backend -> worker
+├── frontend/
+│   ├── .env.example
+│   ├── vite.config.ts
+│   └── src/
+│       ├── main.tsx                # React entry, BrowserRouter
+│       ├── App.tsx                 # Route tree (all routes declared here)
+│       ├── types/
+│       │   └── index.ts            # All shared TypeScript interfaces
+│       ├── context/
+│       │   ├── AuthContext.tsx     # login/registerDoctor/logout, token in localStorage
+│       │   └── ToastContext.tsx    # Global toast notifications
+│       ├── lib/
+│       │   ├── constants.ts        # TOKEN_STORAGE_KEY, USER_STORAGE_KEY
+│       │   └── utils.ts            # cx() classname helper
+│       ├── routes/
+│       │   └── ProtectedRoute.tsx  # Role-based route guard
+│       ├── services/               # API layer (all fetch calls)
+│       │   ├── apiClient.ts        # Thin fetch wrapper (USE_MOCKS toggle)
+│       │   ├── authService.ts      # login, registerDoctor, logout
+│       │   ├── vitalsService.ts    # submitVitals, getVitals, getVitalsLog
+│       │   ├── patientsService.ts  # getPatient, getRoster, createPatient, updatePatient, deletePatient
+│       │   ├── alertsService.ts    # getAlerts, updateAlert, requestFollowUp
+│       │   ├── thresholdsService.ts # getThresholds, saveThresholds
+│       │   ├── insightsService.ts  # getInsights, getWeeklySummaries
+│       │   └── mockData.ts         # In-memory mock data (VITE_USE_MOCKS=true)
+│       ├── components/
+│       │   ├── layout/
+│       │   │   ├── DoctorLayout.tsx    # Sidebar + outlet for doctor pages
+│       │   │   ├── PatientLayout.tsx   # Bottom tab bar + outlet for patient pages
+│       │   │   ├── Sidebar.tsx
+│       │   │   ├── BottomTabBar.tsx
+│       │   │   ├── NotificationBell.tsx
+│       │   │   ├── UserMenu.tsx
+│       │   │   └── icons.tsx
+│       │   ├── charts/
+│       │   │   ├── BPChart.tsx         # Blood pressure line chart (Recharts)
+│       │   │   ├── GlucoseChart.tsx    # Glucose line chart
+│       │   │   ├── WeightSleepChart.tsx
+│       │   │   └── TrendSparkline.tsx  # Mini sparkline for dashboard
+│       │   └── ui/
+│       │       ├── Button.tsx
+│       │       ├── Card.tsx
+│       │       ├── Modal.tsx
+│       │       ├── Badge.tsx
+│       │       ├── Spinner.tsx
+│       │       └── StatStrip.tsx
+│       └── pages/
+│           ├── LoginPage.tsx           # Login + Doctor Registration (mode switcher)
+│           ├── doctor/
+│           │   ├── Dashboard.tsx       # Roster, stats, Add/Edit/Delete patient modals
+│           │   ├── PatientDetail.tsx   # Per-patient vitals, alerts, AI insight
+│           │   ├── Alerts.tsx          # Alert feed with filters
+│           │   ├── Thresholds.tsx      # Per-patient threshold configuration
+│           │   ├── Profile.tsx         # Doctor's own profile editor
+│           │   └── Settings.tsx        # Account settings, password change
+│           └── patient/
+│               ├── Dashboard.tsx       # Latest metrics + sparkline + AI summary
+│               ├── LogVitals.tsx       # Vitals submission form
+│               ├── Trends.tsx          # Charts (7d/30d/90d toggle)
+│               ├── Insights.tsx        # Weekly AI summaries
+│               ├── Profile.tsx         # Patient's own profile
+│               └── Settings.tsx        # Password change
+│
+└── insight-worker/
+    ├── prisma/
+    │   └── schema.prisma           # Mirror of backend schema (shared Supabase DB)
     └── src/
-        ├── index.ts                # Kafka consumer loop & scheduler starter
-        ├── config.ts               # Worker env config (KAFKA_BROKER, GEMINI_API_KEY, etc.)
-        ├── events.ts               # Zod contract for vitals.logged
-        ├── db.ts                   # Worker Prisma client singleton
-        ├── schedulers/             # node-cron weekly summary cron job
+        ├── index.ts                # Kafka consumer + scheduler bootstrap
+        ├── config.ts               # KAFKA_BROKER, GEMINI_API_KEY, cooldown config
+        ├── db.ts                   # Prisma client singleton
+        ├── events.ts               # vitalsLoggedSchema (Zod)
+        ├── util.ts                 # withRetries()
+        ├── ai/
+        │   ├── gemini.ts           # generateJson() — Gemini API wrapper
+        │   ├── prompts.ts          # CLINICAL_SYSTEM + clinicalPrompt()
+        │   └── schemas.ts          # clinicalAnalysisSchema (Zod + JSON schema)
+        ├── rules/
+        │   ├── constants.ts        # CLINICAL defaults, resolveThresholds()
+        │   ├── thresholds.ts       # evaluateThresholds() — deterministic rules
+        │   └── trends.ts           # analyzeBpTrend(), shouldAskAi()
+        ├── schedulers/
+        │   └── index.ts            # Weekly summary cron scheduler
         ├── services/
-        │   └── analyzer.ts         # Fetches vital by ID, evaluates rules, triggers Gemini
-        └── ai/                     # Google Gemini integration & prompts
+        │   ├── analyzer.ts         # processVitalEvent() — main pipeline
+        │   ├── alerts.ts           # createAlertOnce(), recomputeRisk()
+        │   └── weeklySummary.ts    # generateWeeklySummary()
+        └── scripts/
+            ├── seed.ts             # Seed script for dev data
+            ├── publishEvent.ts     # Manual event publisher for testing
+            └── runWeeklySummary.ts # Run weekly summary on demand
 ```
 
 ---
 
-## 3. Tech Stack & Dependencies
+## 4. Frontend Routes
 
-| Component | Framework / Library | Role |
+| Path | Component | Role | Description |
+|---|---|---|---|
+| `/` | `RootRedirect` | any | Redirects to dashboard based on role |
+| `/login` | `LoginPage` | public | Sign-in + Doctor Registration tab |
+| `/register` | `LoginPage` | public | Same page, opens in register mode |
+| `/patient/dashboard` | `PatientDashboard` | patient | Metrics, sparkline, AI summary, alerts |
+| `/patient/log-vitals` | `LogVitals` | patient | Vitals submission form |
+| `/patient/trends` | `Trends` | patient | BP/glucose/weight/sleep charts |
+| `/patient/insights` | `Insights` | patient | Weekly AI-generated summaries |
+| `/patient/profile` | `Profile` | patient | View/edit personal info |
+| `/patient/settings` | `PatientSettings` | patient | Password change |
+| `/doctor/dashboard` | `DoctorDashboard` | doctor | Roster + overview stats + Add/Edit patient |
+| `/doctor/patients/:id` | `PatientDetail` | doctor | Per-patient vitals, alerts, AI insight |
+| `/doctor/patients/:id/thresholds` | `Thresholds` | doctor | Per-patient alert threshold editor |
+| `/doctor/alerts` | `Alerts` | doctor | Alert feed with status/type filters |
+| `/doctor/profile` | `DoctorProfile` | doctor | View/edit clinic name, phone |
+| `/doctor/settings` | `DoctorSettings` | doctor | Password change |
+
+---
+
+## 5. Backend REST API
+
+Base URL: `http://localhost:4000/api`
+Auth: `Authorization: Bearer <supabase-access-token>`
+
+### Auth — [`auth.routes.ts`](/backend/src/modules/auth/auth.routes.ts)
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| `POST` | `/auth/login` | — | Password login via Supabase → returns `{ token, refreshToken, user }` |
+| `POST` | `/auth/refresh` | — | Exchange refresh token for new access token |
+| `POST` | `/auth/register-doctor` | — | Register new doctor in Supabase Auth + DB |
+| `POST` | `/auth/register` | — | Alias for register-doctor (defaults clinic to "HealthLens Clinic") |
+| `POST` | `/auth/logout` | — | Stateless; client clears token |
+| `GET` | `/auth/me` | ✅ | Return current user's profile + clinicName/phone |
+| `PATCH` | `/auth/password` | ✅ | Change password (validates current password first) |
+
+### Doctor — [`doctor.routes.ts`](/backend/src/modules/doctor/doctor.routes.ts)
+
+> All routes require `DOCTOR` role. A `Doctor` DB row must exist or 403 is returned.
+
+| Method | Path | Description |
 |---|---|---|
-| **Frontend** | React 18, Vite 5, Tailwind CSS | SPA with responsive mobile + desktop views |
-| **Charting** | Recharts 2 | BP lines, glucose scatter, dual-axis weight/sleep |
-| **Backend API** | Node.js, Express 4, TypeScript | Modular REST API server (port 4000) |
-| **Database & ORM** | PostgreSQL (Supabase), Prisma 6 | Relational persistence, connection pooling |
-| **Message Broker** | Apache Kafka 3.9 (KRaft mode) | Asynchronous telemetry pipeline (port 9092) |
-| **Worker AI** | `@google/genai` (Gemini 2.5 Flash) | Weekly narrative generation & trend analysis |
-| **Auth** | Supabase Auth + JWT / bcrypt | Dual-mode bearer token verification |
+| `GET` | `/doctor/overview` | Dashboard summary: total patients, critical alerts count, missing readings in 48h, roster, urgent alerts |
+| `GET` | `/doctor/patients` | Roster with optional `?search=` and `?filter=all\|critical\|needs_review` |
+| `POST` | `/doctor/patients` | Create patient: registers in Supabase Auth (admin API), creates `User` + `Patient` + `ChronicCondition` + `PatientThreshold` rows in a transaction. Returns row + `temporaryPassword` (shown once). Optional initial vitals can be included. |
+| `GET` | `/doctor/patients/:id` | Full patient detail: profile, AI insight, alert history (last 10), vitals (last 90 days, up to 500 rows) |
+| `PATCH` | `/doctor/patients/:id` | Edit patient (name, email, phone, DOB, gender, conditions, riskStatus). Email change is mirrored to Supabase Auth first; rolls back on DB failure. |
+| `DELETE` | `/doctor/patients/:id` | Unassign patient from this doctor (sets `doctorId = null`). Account + data preserved. |
+| `PATCH` | `/doctor/profile` | Update doctor's name, clinic name, phone |
+| `GET` | `/doctor/patients/:id/thresholds` | Get per-patient alert thresholds (falls back to schema defaults) |
+| `PUT` | `/doctor/patients/:id/thresholds` | Save per-patient alert thresholds (upsert) |
+
+### Patients — [`patients.routes.ts`](/backend/src/modules/patients/patients.routes.ts)
+
+> `:id` can be the patient's `Patient.id`, `Patient.userId`, or `"me"` (resolved from auth token).
+> Authorization: patient can access their own records; doctor can access their assigned patients.
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/patients/:id/profile` | Patient profile (name, DOB, gender, phone, conditions, assigned doctor) |
+| `PATCH` | `/patients/:id/profile` | Update patient's own profile (phone, gender, name) |
+| `GET` | `/patients/:id/dashboard` | Dashboard snapshot: latest metrics, sparkline (7 days), recent alerts, AI insight |
+| `POST` | `/patients/:id/vitals` | Submit a vitals reading → saved to DB → Kafka event published |
+| `GET` | `/patients/:id/vitals` | Trend data for charts (`?range=7d\|30d\|90d`) + per-metric stats |
+| `GET` | `/patients/:id/vitals/log` | Paginated vitals log (`?page=1&pageSize=20`) |
+| `GET` | `/patients/:id/summaries` | All weekly AI summaries for this patient |
+| `GET` | `/patients/:id/alerts/history` | Full alert history (serialized differently for doctor vs patient) |
+
+### Alerts — [`alerts.routes.ts`](/backend/src/modules/alerts/alerts.routes.ts)
+
+> All routes require `DOCTOR` role.
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/alerts` | All alerts for this doctor's patients (`?status=unread\|acknowledged\|resolved&type=threshold\|ai_pattern`) |
+| `PATCH` | `/alerts/:id` | Update alert status, add/clear clinical note, toggle `noteSharedWithPatient` |
+| `POST` | `/alerts/:id/follow-up` | Request patient follow-up with optional note (always patient-visible) |
 
 ---
 
-## 4. Key Implementation Details
+## 6. Insight Worker Event Pipeline
 
-### A. Authentication & Supabase Integration
-* **Dual Auth Handling (`backend/src/lib/jwt.ts` & `auth.service.ts`)**:
-  * If `SUPABASE_URL` and `SUPABASE_JWT_SECRET` are present, tokens issued by Supabase Auth are decoded and verified directly.
-  * Roles (`DOCTOR` vs `PATIENT`) are extracted from token metadata (`app_metadata.role` or `user_metadata.role`).
-  * If the user was verified in Supabase Auth but does not exist in the Prisma Postgres table yet, `backend/src/middleware/auth.ts` **auto-provisions** their `User` and `Patient`/`Doctor` record automatically on the first authenticated request.
-  * If Supabase is offline or not configured, standard bcrypt-hashed local database authentication handles user sessions.
-* **Role Casing Normalization**:
-  * In Database: Enum `Role` is uppercase (`Role.DOCTOR`, `Role.PATIENT`).
-  * In API Responses: Serialized to lowercase (`"doctor"`, `"patient"`), aligning 1:1 with frontend `types/index.ts` (`AuthUser.role`).
-* **Password Updates (`PATCH /api/auth/password`)**:
-  * Guarded by `requireAuth`. Validates existing password against stored bcrypt hash, verifies minimum length (>=6), hashes new password, and commits update to `User`.
+Triggered every time a patient submits a vitals reading.
 
-### B. Doctor Registration & Role Guards
-* **Doctor Registration**:
-  * Endpoint: `POST /api/auth/register-doctor` (alias `/api/auth/register`).
-  * Creates doctor user + linked `Doctor` profile (with `clinicName` and `phone`) in one transaction.
-  * Frontend UI: Accessible directly via the toggle tab in `frontend/src/pages/LoginPage.tsx`.
-* **Role Guarding (`requireRole`)**:
-  * Routes under `/api/doctor/*` and `/api/alerts/*` are strictly guarded by `requireRole('DOCTOR')`.
-  * Regular patients attempting to call doctor management routes receive `403 Forbidden`.
+```mermaid
+flowchart TD
+    A["POST /patients/:id/vitals"] -->|"Kafka publish\nvitals.logged"| B["Kafka topic\nvitals.logged\n3 partitions"]
+    B --> C["insight-worker consumes\nwithRetries x3"]
+    C --> D["1. Load vital + patient\n+ threshold from DB"]
+    D --> E["2. evaluateThresholds()\ndeterministic rules"]
+    E -->|"Hit"| F["createAlertOnce()\n(dedupeKey idempotent)"]
+    E --> G["3. analyzeBpTrend()\nshouldAskAi()"]
+    G -->|"No flag"| H["recomputeRisk()\nDone"]
+    G -->|"Flagged"| I["4. AI cooldown check\n(PatientInsight.generatedAt)"]
+    I -->|"Cooling + no critical"| H
+    I -->|"Proceed"| J["5. buildClinicalPayload()\nanonymised aggregates only"]
+    J --> K["Gemini Flash 2.0\nstructured JSON output"]
+    K --> L["Upsert PatientInsight\n(narrative, riskLevel, trend)"]
+    L -->|"riskLevel=HIGH\n+ no critical threshold hit\n+ no recent AI alert"| M["createAlertOnce()\nAI_PATTERN alert"]
+    L --> N["recomputeRisk()\nupdate Patient.riskStatus"]
+    F --> N
+```
 
-### C. Doctor & Patient Portal Profile & Settings Separation
-* **User Menu Navigation (`frontend/src/components/layout/UserMenu.tsx`)**:
-  * Resolves separate URLs based on user role or explicit layout props:
-    * Doctor: "My profile" -> `/doctor/profile`, "Account settings" -> `/doctor/settings`.
-    * Patient: "My profile" -> `/patient/profile`, "Account settings" -> `/patient/settings`.
-* **Doctor Profile & Account Pages**:
-  * `/doctor/profile`: Displays and updates doctor credentials (full name, clinic/practice name, office phone) via `GET /api/auth/me` and `PATCH /api/doctor/profile`.
-  * `/doctor/settings`: Standalone page for doctor account security and password changes via `PATCH /api/auth/password`.
-* **Patient Profile & Account Pages**:
-  * `/patient/profile`: Demographics, diagnosed chronic conditions, and assigned doctor details via `GET /api/patients/:id/profile`.
-  * `/patient/settings`: Standalone page for patient password changes and security settings via `PATCH /api/auth/password`.
+### Deterministic Rules ([`thresholds.ts`](/insight-worker/src/rules/thresholds.ts))
 
-### D. Doctor Patient Onboarding ("Add Patient")
-* **Endpoint (`POST /api/doctor/patients`)**:
-  * Guarded by `requireRole('DOCTOR')`.
-  * Automatically resolves the requesting physician's `Doctor` record and assigns `doctorId: doctor.id`.
-  * Checks for duplicate emails (returns `409 Conflict` if existing).
-  * In a single Prisma transaction:
-    1. Creates `User` with role `PATIENT` and initial default hashed demo password (`demo1234`).
-    2. Creates `Patient` with demographics (`name`, `dateOfBirth`, `gender`, `phone`), risk status, and chronic conditions.
-    3. Creates default `PatientThreshold` records.
-    4. Logs initial telemetry vitals (BP, glucose, weight, sleep) if supplied in the form.
-  * Connects directly to the Doctor Dashboard "Add Patient" modal.
+| Rule | Trigger | Severity |
+|---|---|---|
+| `BP_THRESHOLD` | Systolic > `systolicMax` OR diastolic > `diastolicMax` | CRITICAL |
+| `GLUCOSE_LOW` | Glucose < `glucoseFastingMin` | CRITICAL |
+| `GLUCOSE_VERY_HIGH` | Glucose ≥ 400 mg/dL (clinical emergency) | CRITICAL |
+| `GLUCOSE_FASTING_HIGH` | Fasting glucose > `glucoseFastingMax` | CAUTION |
+| `GLUCOSE_POST_MEAL_HIGH` | Post-meal glucose > `glucosePostMealMax` | CAUTION |
+| `WEIGHT_DELTA` | Weight change ≥ `weightDeltaKg` in `weightDeltaDays` days | CAUTION |
 
-### E. AI Health Summaries & Seeding
-* **Database & Mock Seeding (`backend/prisma/seed.ts` & `frontend/src/services/mockData.ts`)**:
-  * All seeded demo patients (`pat_001` Marcus Bell, `pat_002` Aiko Tanaka, `pat_003` Priya Patel) have **4 full weeks** of idempotent `WeeklySummary` rows.
-  * Summaries cover narrative overviews, dietary/compliance takeaways, and trend states.
-  * Displayed directly in `/patient/insights` in both live API and mock mode.
-
-### F. Ownership & Tenant Isolation
-* **Doctor Roster**:
-  * `GET /api/doctor/overview` and `GET /api/doctor/patients` automatically resolve the requesting doctor ID from `req.user.sub` / `req.user.dbUserId` and filter queries using `where: { doctorId: doctor.id }`.
-  * A doctor only ever views patients assigned to them.
-* **Patient Telemetry (`/api/patients/:id/*`)**:
-  * Handlers check that `req.user` is either the patient themselves (`userId === patient.userId`) OR the patient's assigned physician (`doctorId === doctor.id`). Unauthorized requests return `403 Forbidden`.
-  * Supports `:id = 'me'` to automatically resolve the calling user's patient profile.
-
-### G. Event-Driven Telemetry Pipeline (Kafka)
-* When a patient submits a reading via `POST /api/patients/:id/vitals`:
-  1. Record is inserted into the `Vital` table in PostgreSQL.
-  2. Patient's `lastReadingAt` timestamp is updated.
-  3. `publishVitalLoggedEvent()` publishes a thin claim-check event to Kafka topic `vitals.logged`:
-     ```json
-     {
-       "vitalId": "cuid...",
-       "patientId": "pat_001",
-       "recordedAt": "2026-10-15T12:00:00.000Z"
-     }
-     ```
-  4. **Partition Key**: The message key is set to `patientId`. Kafka ensures that all events for a single patient land in the same partition, guaranteeing strict FIFO order of readings for trend processing.
-* The `insight-worker` consumer:
-  1. Validates the event with Zod (`vitalsLoggedSchema`).
-  2. Re-reads the fresh `Vital` row from PostgreSQL.
-  3. Checks hard cutoffs from `PatientThreshold`.
-  4. Triggers AI trend analysis with cooldown throttling (`AI_COOLDOWN_HOURS = 12`).
-  5. Inserts an `Alert` with `@unique` constraint on `dedupeKey` to ensure idempotency.
+### AI Analysis
+- **Model**: Gemini Flash 2.0 (`generateContent` with `responseSchema`)
+- **Input**: Anonymised aggregates only (no name, email, DOB — only condition labels, averages, trend slope, R², reading counts)
+- **Output**: `{ riskLevel: LOW|MODERATE|HIGH, trend: RISING|STABLE|FALLING, rationale: string }`
+- **Cooldown**: configurable `AI_COOLDOWN_HOURS` (default 6h) prevents redundant API calls
+- **AI alert suppression**: `AI_PATTERN` alert only raised if no similar alert in last 3 days
 
 ---
 
-## 5. API Reference & Contract Matrix
+## 7. Database Schema
 
-All endpoints are mounted with both `/api/` (matching frontend `VITE_API_BASE_URL`) and direct paths:
+Hosted on **Supabase Postgres**. Schema managed via Prisma migrations from `/backend`.
 
-| Method | Path | Auth | Role | Description |
-|---|---|---|---|---|
-| `POST` | `/api/auth/login` | Public | Any | Sign in with email/password; returns `{ token, user }` |
-| `POST` | `/api/auth/register-doctor` | Public | Any | Register a new physician account & clinic profile |
-| `GET` | `/api/auth/me` | Bearer | Any | Hydrate current user profile (includes `clinicName` & `phone`) |
-| `PATCH` | `/api/auth/password` | Bearer | Any | Change password (verifies current, updates hash) |
-| `POST` | `/api/auth/logout` | Optional | Any | Stateless session invalidation |
-| `GET` | `/api/patients/:id/dashboard` | Bearer | Owner / Doc | Aggregated dashboard, 7-day metric deltas, sparkline |
-| `POST` | `/api/patients/:id/vitals` | Bearer | Owner / Doc | Submit vital readings & emit Kafka event |
-| `GET` | `/api/patients/:id/vitals` | Bearer | Owner / Doc | Trend queries (`range=7d\|30d\|90d`, `filter=bp\|glucose...`) |
-| `GET` | `/api/patients/:id/vitals/log` | Bearer | Owner / Doc | Paginated raw vitals log table (`page`, `pageSize`) |
-| `GET` | `/api/patients/:id/profile` | Bearer | Owner / Doc | Fetch patient demographics, conditions & doctor info |
-| `PATCH` | `/api/patients/:id/profile` | Bearer | Owner / Doc | Update phone, gender, name |
-| `GET` | `/api/patients/:id/summaries` | Bearer | Owner / Doc | Fetch AI weekly summaries |
-| `GET` | `/api/patients/:id/alerts/history` | Bearer | Owner / Doc | Fetch patient alert history |
-| `GET` | `/api/doctor/overview` | Bearer | DOCTOR | Doctor dashboard KPI counts, urgent alert queue, roster |
-| `GET` | `/api/doctor/patients` | Bearer | DOCTOR | Filtered roster (`search=`, `filter=all\|critical\|needs_review`) |
-| `POST` | `/api/doctor/patients` | Bearer | DOCTOR | Onboard new patient assigned to current doctor |
-| `GET` | `/api/doctor/patients/:id` | Bearer | DOCTOR | Deep-dive patient telemetry, Gemini narrative, history |
-| `PATCH` | `/api/doctor/profile` | Bearer | DOCTOR | Update physician name, clinic name, office phone |
-| `GET` | `/api/doctor/patients/:id/thresholds` | Bearer | DOCTOR | Get patient threshold configuration |
-| `PUT` | `/api/doctor/patients/:id/thresholds` | Bearer | DOCTOR | Upsert patient threshold configuration |
-| `GET` | `/api/alerts` | Bearer | DOCTOR | Alert management feed (`status=`, `type=`) |
-| `PATCH` | `/api/alerts/:id` | Bearer | DOCTOR | Update alert status (`acknowledged`, `resolved`) & note |
-| `POST` | `/api/alerts/:id/follow-up` | Bearer | DOCTOR | Trigger patient reminder / follow-up action |
+```mermaid
+erDiagram
+    User {
+        String id PK
+        String email UK
+        String password
+        String name
+        Role role
+        DateTime createdAt
+        DateTime updatedAt
+    }
+    Doctor {
+        String id PK
+        String userId FK
+        String clinicName
+        String phone
+    }
+    Patient {
+        String id PK
+        String userId FK
+        String doctorId FK
+        DateTime doctorAssignedAt
+        DateTime dateOfBirth
+        String gender
+        String phone
+        RiskStatus riskStatus
+        DateTime lastReadingAt
+    }
+    ChronicCondition {
+        String id PK
+        String patientId FK
+        String label
+    }
+    Vital {
+        String id PK
+        String patientId FK
+        Int systolic
+        Int diastolic
+        Float glucose
+        GlucoseContext glucoseContext
+        Float weightKg
+        Float sleepHours
+        Int heartRate
+        DateTime recordedAt
+    }
+    PatientThreshold {
+        String patientId PK_FK
+        Int systolicMax
+        Int diastolicMax
+        Int glucoseFastingMax
+        Int glucoseFastingMin
+        Int glucosePostMealMax
+        Float weightDeltaKg
+        Int weightDeltaDays
+    }
+    Alert {
+        String id PK
+        String patientId FK
+        String acknowledgedById FK
+        AlertType type
+        AlertSeverity severity
+        AlertStatus status
+        String rule
+        String triggerLabel
+        String detail
+        String aiRationale
+        Json metrics
+        String vitalId
+        String dedupeKey UK
+        String clinicalNote
+        Boolean noteSharedWithPatient
+        DateTime followUpRequestedAt
+        String followUpNote
+        DateTime triggeredAt
+    }
+    PatientInsight {
+        String patientId PK_FK
+        String narrative
+        AiRiskLevel riskLevel
+        String trend
+        Json stats
+        DateTime generatedAt
+    }
+    WeeklySummary {
+        String id PK
+        String patientId FK
+        DateTime weekStart
+        DateTime weekEnd
+        String narrative
+        String[] takeaways
+        String trend
+        Json stats
+    }
+
+    User ||--o| Doctor : "has"
+    User ||--o| Patient : "is"
+    Doctor ||--o{ Patient : "manages"
+    Patient ||--o{ ChronicCondition : "has"
+    Patient ||--o{ Vital : "logs"
+    Patient ||--o| PatientThreshold : "has"
+    Patient ||--o{ Alert : "receives"
+    Patient ||--o| PatientInsight : "has"
+    Patient ||--o{ WeeklySummary : "has"
+    Doctor ||--o{ Alert : "acknowledges"
+```
+
+### Key Design Decisions in Schema
+
+- **`User` is the identity anchor** — both `Doctor` and `Patient` are 1-to-1 extensions. This avoids duplicating email/name.
+- **`Patient.riskStatus`** is maintained by the insight-worker (not computed on read) so the doctor roster query is a cheap indexed scan.
+- **`Alert.dedupeKey`** is unique — makes Kafka redelivery and retry loops fully idempotent.
+- **`PatientInsight`** is a single-row cache (one per patient) — the insight-worker upserts it, so no Redis is needed for cooldown.
+- **`PatientThreshold`** has defaults matching clinical guidelines — missing rows in the worker fall back gracefully.
+- **All measurements in `Vital` are nullable** — a patient can log only BP or only glucose in one submission.
 
 ---
 
-## 6. Environment Configurations
+## 8. Authentication Flow
 
-### Backend (`backend/.env`)
-```env
-PORT=4000
-DATABASE_URL="postgresql://postgres:[PASSWORD]@db.[PROJECT_ID].supabase.co:6543/postgres?pgbouncer=true"
-DIRECT_URL="postgresql://postgres:[PASSWORD]@db.[PROJECT_ID].supabase.co:5432/postgres"
-JWT_SECRET="your-jwt-secret-or-supabase-jwt-secret"
+```mermaid
+sequenceDiagram
+    participant FE as Frontend
+    participant BE as Backend API
+    participant SUPA as Supabase Auth
 
-# Optional Supabase Auth integration:
-SUPABASE_URL="https://[PROJECT_ID].supabase.co"
-SUPABASE_JWT_SECRET="your-supabase-jwt-secret"
-SUPABASE_SERVICE_ROLE_KEY="your-supabase-service-role-key"
+    FE->>BE: POST /auth/login { email, password }
+    BE->>SUPA: POST /auth/v1/token?grant_type=password (anon key)
+    SUPA-->>BE: { access_token, refresh_token, user }
+    BE->>BE: Find/create User row in Prisma DB
+    BE-->>FE: { token, refreshToken, user }
+    FE->>FE: localStorage.setItem(token)
 
-# Kafka broker:
-KAFKA_BROKER=localhost:9092
+    Note over FE,BE: Every protected request
+
+    FE->>BE: GET /any-protected-route (Bearer token)
+    BE->>SUPA: GET /auth/v1/user (Bearer token, anon key)
+    SUPA-->>BE: { id, email, app_metadata: { role } }
+    BE->>BE: Find User in Prisma DB → req.user
+    BE-->>FE: Response
 ```
 
-### Insight Worker (`insight-worker/.env`)
-```env
-DATABASE_URL="postgresql://postgres:[PASSWORD]@db.[PROJECT_ID].supabase.co:6543/postgres?pgbouncer=true"
-KAFKA_BROKER="localhost:9092"
-KAFKA_TOPIC="vitals.logged"
-KAFKA_DLQ_TOPIC="vitals.logged.dlq"
-KAFKA_GROUP_ID="healthlens-insight-group"
-GEMINI_API_KEY="your-google-gemini-api-key"
-GEMINI_MODEL="gemini-2.5-flash"
-AI_COOLDOWN_HOURS=12
-ENABLE_SCHEDULER="true"
-```
-
-### Frontend (`frontend/.env` or `frontend/.env.local`)
-```env
-# Toggle between local mock generator and live Express API:
-VITE_USE_MOCKS=false
-VITE_API_BASE_URL=http://localhost:4000/api
-```
+### Role Encoding
+- `app_metadata.role` in Supabase stores `"DOCTOR"` or `"PATIENT"` (set at creation by the service-role Admin API).
+- The middleware reads this to populate `req.user.role`.
+- Patients cannot modify `app_metadata` (unlike `user_metadata`).
 
 ---
 
-## 7. Local Development Quickstart
+## 9. Design & Technology Choices
 
-Follow these steps to run the complete stack locally:
+### Frontend
+| Choice | Rationale |
+|---|---|
+| **React 18 + Vite** | Fast HMR in dev; small production bundle. |
+| **Tailwind CSS** | Utility-first, design-token consistent (custom `ink`, `teal`, `brick` palette). No CSS-in-JS runtime. |
+| **React Router v6** | Nested layouts (`DoctorLayout` / `PatientLayout`) with role-based `ProtectedRoute`. |
+| **`VITE_USE_MOCKS`** | Entire service layer switches between real API and in-memory mock data — no code change required for UI-only development. |
+| **`localStorage` for token** | Standard SPA approach. Real Supabase JWTs are short-lived (~1h); a refresh token handles renewal. No fake tokens are ever stored. |
+| **No global state library** | `AuthContext` + `ToastContext` cover shared state. Per-page data is fetched on mount with `useEffect`. Avoids Redux boilerplate at this scale. |
 
-### 1. Start Local Infrastructure (Kafka)
-In root directory:
-```bash
-docker compose up -d
-```
-*Spins up Apache Kafka on `localhost:9092`.*
+### Backend
+| Choice | Rationale |
+|---|---|
+| **Express + TypeScript** | Familiar, minimal overhead. Type-safety through Prisma-generated types. |
+| **Prisma ORM** | Schema-first, typed queries, migration tooling, works seamlessly with Supabase Postgres. |
+| **Supabase Auth (Admin API)** | Doctor creates patients server-side with `email_confirm: true` — no email round-trip. Service-role key stays server-only. |
+| **Anon key for login/token validation** | Password grant tokens must be minted with the anon key; service-role key is admin-only. |
+| **Module-per-resource routing** | Each domain (`auth`, `doctor`, `patients`, `alerts`) lives in its own file. Easy to navigate and extend. |
+| **Transaction for patient creation** | Supabase user is created first (can't be rolled back by Postgres); on DB failure, the Supabase user is deleted manually as compensation. |
 
-### 2. Seed Database
-In `backend/`:
-```bash
-npm run seed
-```
-*Seeds default doctor (`doctor@healthlens.demo`) and linked patients (`patient@healthlens.demo`, `aiko@healthlens.demo`, `priya@healthlens.demo`), with hashed passwords `demo1234`, 30 days of baseline readings, and 4 weeks of weekly AI summaries.*
-
-### 3. Start Backend
-In `backend/`:
-```bash
-npm run dev
-```
-*Express API starts on `http://localhost:4000`.*
-
-### 4. Start Insight Worker
-In `insight-worker/`:
-```bash
-npm run dev
-```
-*Worker connects to Kafka topic `vitals.logged` and starts background schedulers.*
-
-### 5. Start Frontend
-In `frontend/`:
-```bash
-npm run dev
-```
-*Client starts on `http://localhost:5173`.*
+### Insight Worker
+| Choice | Rationale |
+|---|---|
+| **Kafka (not webhooks)** | Decoupled: API responds to patient instantly; analysis is async. Redelivery + DLQ gives durability without saga complexity. |
+| **Deterministic rules before AI** | A BP of 200/120 fires a `CRITICAL` alert even if Gemini is down. AI never gates safety-critical paths. |
+| **Gemini Flash 2.0 with structured output** | JSON schema output (`responseSchema`) avoids prompt engineering for parsing. Flash model is cheap enough for per-reading calls at this scale. |
+| **Privacy-preserving AI payload** | Only statistical aggregates (averages, slopes, counts) + condition labels reach Gemini. No PII (name, email, DOB) is sent to the LLM. |
+| **`dedupeKey` for idempotency** | Kafka-at-least-once delivery + exponential retry means the same event may be processed twice. Unique `dedupeKey` makes `createAlertOnce()` safe. |
 
 ---
 
-## 8. Demo Credentials & Test Scenarios
+## 10. Environment Variables
 
-### Demo Credentials
-* **Doctor**: `doctor@healthlens.demo` / `demo1234`
-* **Patient**: `patient@healthlens.demo` / `demo1234`
+### `backend/.env`
 
-### E2E Flow to Verify
-1. Sign in as **Patient** (`patient@healthlens.demo`).
-2. Navigate to **Log Vitals**, enter readings (e.g. Systolic `175`, Diastolic `105`), and submit.
-3. Observe backend log: record saved to PostgreSQL and event published to Kafka `vitals.logged`.
-4. Observe insight-worker log: event consumed, rule triggered, threshold breached, and new `Alert` stored in DB.
-5. Sign in as **Doctor** (`doctor@healthlens.demo`).
-6. Observe **Doctor Dashboard** and **Alert Console**: critical flag appears in real-time, ready for one-click acknowledgment and clinical note entry.
-7. Open User Menu to test **My Profile** (`/doctor/profile`) and **Account Settings** (`/doctor/settings`).
-8. Add a new patient from the Doctor Dashboard modal to test `POST /api/doctor/patients`.
+| Variable | Required | Description |
+|---|---|---|
+| `DATABASE_URL` | ✅ | Supabase pooled Postgres URL (port 6543, `?pgbouncer=true`) |
+| `DIRECT_URL` | ✅ | Direct Postgres URL (port 5432) — Prisma migrations only |
+| `SUPABASE_URL` | ✅ | Supabase project URL |
+| `SUPABASE_ANON_KEY` | ✅ | Public anon key — used for login and token validation |
+| `SUPABASE_SERVICE_ROLE_KEY` | ✅ | Secret service-role key — used for admin user creation |
+| `SUPABASE_JWT_SECRET` | optional | JWT secret (not used in middleware; kept for reference) |
+| `PORT` | optional | API port (default: `4000`) |
+| `JWT_SECRET` | optional | Legacy fallback (not used for auth logic) |
+| `KAFKA_BROKER` | optional | Kafka broker address (default: `localhost:9092`) |
+
+### `frontend/.env`
+
+| Variable | Required | Description |
+|---|---|---|
+| `VITE_API_BASE_URL` | optional | Backend URL (default: `http://localhost:4000/api`) |
+| `VITE_USE_MOCKS` | optional | `"false"` = real API; omit or `"true"` = mock data |
+
+---
+
+## 11. What's Not Yet Built (Known Gaps)
+
+| Feature | Status | Notes |
+|---|---|---|
+| **Token refresh on expiry** | ❌ Not wired | `POST /auth/refresh` endpoint exists; frontend doesn't auto-call it when a 401 is received |
+| **Patient self-registration** | ❌ Not built | Patients are always created by their doctor |
+| **Notifications / push** | ❌ Not built | Alerts live in DB; no push or email delivery |
+| **Doctor ↔ patient chat** | ❌ Not built | Follow-up notes are one-way (doctor writes, patient reads via alert) |
+| **Heart rate in vitals form** | ❌ Not surfaced | `heartRate` column exists in DB; LogVitals form doesn't include it yet |
+| **Weekly summary scheduler** | ⚠️ Partial | `schedulers/index.ts` exists; exact cron trigger needs verifying |
+| **Supabase RLS policies** | ❌ Not set | DB security relies on backend scoping, not row-level security |
+| **Offline / PWA** | ❌ Not built | No service worker |
