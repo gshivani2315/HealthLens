@@ -71,49 +71,6 @@ cd insight-worker && npm install && cd ..
 
 ---
 
-## Step 3 — Environment variables
-
-### `backend/.env`
-
-```env
-# Supabase – pooled connection (PgBouncer, port 6543)
-DATABASE_URL="postgresql://postgres.[ref]:[password]@aws-0-[region].pooler.supabase.com:6543/postgres?pgbouncer=true"
-
-# Supabase – direct connection (port 5432, required for migrations)
-DIRECT_URL="postgresql://postgres.[ref]:[password]@aws-0-[region].pooler.supabase.com:5432/postgres"
-
-# Supabase project credentials
-SUPABASE_URL="https://[ref].supabase.co"
-SUPABASE_ANON_KEY="eyJ..."
-SUPABASE_SERVICE_ROLE_KEY="eyJ..."
-
-# JWT (generate with: openssl rand -base64 64)
-JWT_SECRET="your-secret-here"
-JWT_REFRESH_SECRET="your-refresh-secret-here"
-
-# Server
-PORT=3001
-NODE_ENV=development
-```
-
-### `frontend/.env`
-
-```env
-VITE_API_URL=http://localhost:3001/api
-VITE_SUPABASE_URL="https://[ref].supabase.co"
-VITE_SUPABASE_ANON_KEY="eyJ..."
-```
-
-### `insight-worker/.env`
-
-```env
-DATABASE_URL="postgresql://..."   # same pooled URL as backend
-DIRECT_URL="postgresql://..."     # same direct URL as backend
-GEMINI_API_KEY="AIza..."
-```
-
----
-
 ## Step 4 — Apply the database schema
 
 Run from the `backend/` directory:
