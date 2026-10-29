@@ -155,15 +155,6 @@ A doctor generates a **CareInvite** code from their dashboard. They share it wit
 3. Marks the invite `ACCEPTED`.
 4. Sends an in-app notification to both parties.
 
-**Seeded invite codes:**
-
-| Code | Doctor | Specialty | Email restriction | Valid for |
-|---|---|---|---|---|
-| `HL-RUIZ-OPEN` | Dr. Elena Ruiz | Primary Care | None (any patient) | 30 days |
-| `HL-OKFR-2024` | Dr. James Okafor | Cardiology | `newpatient@example.com` only | 7 days |
-
-To use: log in as a patient → Profile → "Connect to a Doctor" → enter code.  
-To generate: log in as a doctor → Dashboard → "Issue Invite Code".
 
 ---
 
