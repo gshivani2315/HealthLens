@@ -340,17 +340,10 @@ erDiagram
         DateTime createdAt
         DateTime updatedAt
     }
-    ClinicMember {
-        String id PK
-        String doctorId FK
-        String clinicId FK
-        String role
-        DateTime createdAt
-        DateTime updatedAt
-    }
     Doctor {
         String id PK
         String userId FK
+        String clinicId FK
         String clinicName
         String phone
         DateTime createdAt
@@ -494,8 +487,7 @@ erDiagram
 
     User ||--o| Doctor : "has"
     User ||--o| Patient : "is"
-    Doctor ||--o{ ClinicMember : "belongs to"
-    Clinic ||--o{ ClinicMember : "has"
+    Doctor }o--|| Clinic : "belongs to (one clinic)"
     Doctor ||--o{ CareAssignment : "supervises"
     Patient ||--o{ CareAssignment : "has"
     Clinic ||--o{ CareAssignment : "houses"
@@ -514,7 +506,8 @@ erDiagram
 
 ### Key Design Decisions in Schema
 
-- **Multi-Clinic, Multi-Doctor Care Model (`CareAssignment`)** — A patient can have multiple doctors across specialties (e.g. Cardiology, Endocrinology, Primary Care), and doctors can belong to multiple clinics (`ClinicMember`).
+- **One Doctor, One Clinic** — A doctor belongs to exactly one clinic via `Doctor.clinicId`. The previous many-to-many `ClinicMember` table has been removed as it did not reflect real-world clinical structure.
+- **Multi-Doctor Care Model (`CareAssignment`)** — A patient can have multiple active doctors across specialties (e.g. Cardiology + Primary Care). Each `CareAssignment` links a patient to a doctor at the doctor's clinic with a specialty label.
 - **Single Access Rule Guard (`hasActiveCareAssignment`)** — A doctor can access a patient if and only if an ACTIVE `CareAssignment` exists between them. Clinic membership alone grants no patient access.
 - **Shared Alerts and Shared Thresholds** — Alerts are shared across all active doctors caring for the patient. Acknowledging an alert records `acknowledgedById` while marking the shared state. Alert thresholds are unified per patient.
 - **`CareInvite` for Self-Registration** — Patients can self-register (`POST /auth/register-patient`) and link to a doctor via a doctor-issued invite code.

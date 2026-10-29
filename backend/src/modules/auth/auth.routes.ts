@@ -105,9 +105,7 @@ router.get('/me', requireAuth, async (req, res, next) => {
       include: {
         doctor: {
           include: {
-            clinicMemberships: {
-              include: { clinic: true },
-            },
+            clinic: true, // Direct 1-to-1 clinic relation
           },
         },
         patient: {
@@ -125,21 +123,18 @@ router.get('/me', requireAuth, async (req, res, next) => {
     });
     if (!user) return res.status(404).json({ message: 'User not found' });
 
-    const primaryClinic = user.doctor?.clinicMemberships?.[0]?.clinic;
+    const clinic = user.doctor?.clinic;
     res.json({
       id: user.id,
       email: user.email,
       name: user.name,
       role: user.role.toLowerCase() as 'patient' | 'doctor',
-      clinicName: primaryClinic?.name ?? user.doctor?.clinicName ?? undefined,
+      clinicName: clinic?.name ?? user.doctor?.clinicName ?? undefined,
       phone: user.doctor?.phone ?? user.patient?.phone ?? undefined,
-      clinics: user.doctor?.clinicMemberships?.map((cm) => ({
-        id: cm.clinic.id,
-        name: cm.clinic.name,
-        role: cm.role,
-        phone: cm.clinic.phone,
-        address: cm.clinic.address,
-      })),
+      // Single clinic object (doctor belongs to exactly one clinic)
+      clinic: clinic
+        ? { id: clinic.id, name: clinic.name, phone: clinic.phone, address: clinic.address }
+        : undefined,
       activeDoctors: user.patient?.careAssignments?.map((ca) => ({
         assignmentId: ca.id,
         doctorId: ca.doctorId,

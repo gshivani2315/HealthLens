@@ -6,13 +6,22 @@ This document provides a comprehensive record of all changes made across the Hea
 
 ## 1. Multiple Clinics & Multiple Doctors per Patient
 
+### Design Rule (updated Oct 2026)
+- **One doctor belongs to exactly one clinic.** A doctor registers under a clinic and that clinic is fixed to their profile via `Doctor.clinicId`.
+- **One patient can have many doctors**, each from any clinic, via `CareAssignment`.
+- The previous many-to-many `ClinicMember` join table has been **removed**. It allowed a doctor to belong to multiple clinics, which does not reflect real-world clinical structure.
+
 ### Schema & Data Models
 - **`Clinic`**:
   - Independent entity with fields: `id`, `name`, `phone`, `address`, `createdAt`, `updatedAt`.
-  - Relations to `ClinicMember`, `CareAssignment`, and `CareInvite`.
-- **`ClinicMember`**:
-  - Many-to-many link between `Doctor` and `Clinic`: `id`, `doctorId`, `clinicId`, `role` (e.g. `PHYSICIAN`, `SPECIALIST`), `createdAt`, `updatedAt`.
-  - Unique constraint: `@@unique([doctorId, clinicId])`. Allows a single doctor to belong to multiple clinics.
+  - Back-relation: `doctors Doctor[]` — a clinic can have many doctors, each doctor has exactly one clinic.
+  - Relations to `CareAssignment` and `CareInvite`.
+- **`Doctor`** (updated):
+  - New field: `clinicId String?` — FK to `Clinic`. The single clinic this doctor belongs to.
+  - Removed: `clinicMemberships ClinicMember[]` relation.
+  - Legacy `clinicName String?` column preserved for backward compatibility.
+- **`ClinicMember`** (removed):
+  - The many-to-many join table between `Doctor` and `Clinic` has been dropped in favour of the direct `Doctor.clinicId` foreign key.
 - **`CareAssignment`**:
   - Links a `Patient` to a `Doctor` through a `Clinic` with a specialty label (e.g. "Cardiology", "Primary Care") and status (`AssignmentStatus`: `PENDING`, `ACTIVE`, `ENDED`).
   - Fields: `id`, `patientId`, `doctorId`, `clinicId`, `specialty`, `status`, `assignedAt`, `endedAt`, `createdAt`, `updatedAt`.

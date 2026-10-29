@@ -57,6 +57,33 @@ async function main() {
 
   // ── 1. USERS & DOCTORS ────────────────────────────────────────────────────
 
+  // ── Clinics must exist before doctors reference them ──────────────────────
+  // We upsert clinics first, then create doctors pointing at them.
+  // (Doctors are created below; their clinicId is set via update after upsert.)
+
+  const clinicRuizTemp = await prisma.clinic.upsert({
+    where:  { id: 'clinic_ruiz_01' },
+    update: {},
+    create: {
+      id:      'clinic_ruiz_01',
+      name:    'Meridian Family Health',
+      phone:   '+1 (555) 019-2231',
+      address: '12 Meridian Way, Suite 300, Austin TX 78701',
+    },
+  });
+
+  const clinicOkaforTemp = await prisma.clinic.upsert({
+    where:  { id: 'clinic_okafor_01' },
+    update: {},
+    create: {
+      id:      'clinic_okafor_01',
+      name:    'Okafor Cardiology Centre',
+      phone:   '+1 (555) 812-0044',
+      address: '88 Heart Boulevard, Austin TX 78702',
+    },
+  });
+
+  // Create doctors, linking each directly to their single clinic via clinicId
   const dr1User = await prisma.user.upsert({
     where:   { email: 'doctor@healthlens.demo' },
     update:  { password: hash },
@@ -65,11 +92,24 @@ async function main() {
       password: hash,
       name:     'Dr. Elena Ruiz',
       role:     Role.DOCTOR,
-      doctor:   { create: { clinicName: 'Meridian Family Health', phone: '+1 (555) 019-2231' } },
+      doctor: {
+        create: {
+          clinicId:  clinicRuizTemp.id,
+          clinicName: 'Meridian Family Health', // legacy column kept
+          phone:     '+1 (555) 019-2231',
+        },
+      },
     },
     include: { doctor: true },
   });
-  const dr1 = dr1User.doctor!;
+  // If user already existed (upsert hit update path), ensure clinicId is set
+  if (!dr1User.doctor?.clinicId) {
+    await prisma.doctor.update({
+      where: { userId: dr1User.id },
+      data:  { clinicId: clinicRuizTemp.id },
+    });
+  }
+  const dr1 = (await prisma.doctor.findUnique({ where: { userId: dr1User.id } }))!;
 
   const dr2User = await prisma.user.upsert({
     where:   { email: 'doctor2@healthlens.demo' },
@@ -79,79 +119,36 @@ async function main() {
       password: hash,
       name:     'Dr. James Okafor',
       role:     Role.DOCTOR,
-      doctor:   { create: { clinicName: 'Okafor Cardiology Centre', phone: '+1 (555) 812-0044' } },
+      doctor: {
+        create: {
+          clinicId:   clinicOkaforTemp.id,
+          clinicName: 'Okafor Cardiology Centre', // legacy column kept
+          phone:      '+1 (555) 812-0044',
+        },
+      },
     },
     include: { doctor: true },
   });
-  const dr2 = dr2User.doctor!;
+  if (!dr2User.doctor?.clinicId) {
+    await prisma.doctor.update({
+      where: { userId: dr2User.id },
+      data:  { clinicId: clinicOkaforTemp.id },
+    });
+  }
+  const dr2 = (await prisma.doctor.findUnique({ where: { userId: dr2User.id } }))!;
 
   console.log(`✅  Doctors: ${dr1User.email} | ${dr2User.email}`);
 
   // ── 2. CLINICS ────────────────────────────────────────────────────────────
 
-  const clinicRuiz = await prisma.clinic.upsert({
-    where:  { id: `clinic_${dr1.id}` },
-    update: {},
-    create: {
-      id:      `clinic_${dr1.id}`,
-      name:    'Meridian Family Health',
-      phone:   '+1 (555) 019-2231',
-      address: '12 Meridian Way, Suite 300, Austin TX 78701',
-    },
-  });
+  // Clinics were already upserted above (before doctors).
+  // Re-fetch them here so we have the full objects for later use.
+  const clinicRuiz   = clinicRuizTemp;
+  const clinicOkafor = clinicOkaforTemp;
 
-  const clinicOkafor = await prisma.clinic.upsert({
-    where:  { id: `clinic_${dr2.id}` },
-    update: {},
-    create: {
-      id:      `clinic_${dr2.id}`,
-      name:    'Okafor Cardiology Centre',
-      phone:   '+1 (555) 812-0044',
-      address: '88 Heart Boulevard, Austin TX 78702',
-    },
-  });
+  console.log(`✅  Clinics: ${clinicRuiz.name} | ${clinicOkafor.name}`);
 
-  const clinicShared = await prisma.clinic.upsert({
-    where:  { id: 'clinic_shared_01' },
-    update: {},
-    create: {
-      id:      'clinic_shared_01',
-      name:    'Austin Multi-Specialty Group',
-      phone:   '+1 (555) 700-1234',
-      address: '400 Congress Ave, Austin TX 78701',
-    },
-  });
-
-  console.log(`✅  Clinics: ${clinicRuiz.name} | ${clinicOkafor.name} | ${clinicShared.name}`);
-
-  // ── 3. CLINIC MEMBERS ─────────────────────────────────────────────────────
-
-  await Promise.all([
-    prisma.clinicMember.upsert({
-      where:  { doctorId_clinicId: { doctorId: dr1.id, clinicId: clinicRuiz.id } },
-      update: {},
-      create: { doctorId: dr1.id, clinicId: clinicRuiz.id, role: 'PHYSICIAN' },
-    }),
-    prisma.clinicMember.upsert({
-      where:  { doctorId_clinicId: { doctorId: dr2.id, clinicId: clinicOkafor.id } },
-      update: {},
-      create: { doctorId: dr2.id, clinicId: clinicOkafor.id, role: 'PHYSICIAN' },
-    }),
-    prisma.clinicMember.upsert({
-      where:  { doctorId_clinicId: { doctorId: dr1.id, clinicId: clinicShared.id } },
-      update: {},
-      create: { doctorId: dr1.id, clinicId: clinicShared.id, role: 'SPECIALIST' },
-    }),
-    prisma.clinicMember.upsert({
-      where:  { doctorId_clinicId: { doctorId: dr2.id, clinicId: clinicShared.id } },
-      update: {},
-      create: { doctorId: dr2.id, clinicId: clinicShared.id, role: 'SPECIALIST' },
-    }),
-  ]);
-
-  console.log('✅  Clinic memberships set.');
-
-  // ── 4. PATIENTS ───────────────────────────────────────────────────────────
+  // ── 3. PATIENTS ───────────────────────────────────────────────────────────
 
   const patientDefs = [
     {
@@ -442,7 +439,7 @@ async function main() {
     }),
   ]);
 
-  // ENDED historical assignment for demo of past state
+  // ENDED historical assignment — Marcus was previously seen at Meridian under Preventive Medicine
   await prisma.careAssignment.upsert({
     where:  { id: 'ca_hist_ended_demo' },
     update: {},
@@ -450,7 +447,7 @@ async function main() {
       id:         'ca_hist_ended_demo',
       patientId:  marcus.id,
       doctorId:   dr1.id,
-      clinicId:   clinicShared.id,
+      clinicId:   clinicRuiz.id,
       specialty:  'Preventive Medicine',
       status:     AssignmentStatus.ENDED,
       assignedAt: daysAgo(90),
@@ -649,7 +646,9 @@ async function main() {
   console.log('│              Demo Login Credentials                  │');
   console.log('├─────────────────────────────────────────────────────┤');
   console.log('│ DOCTOR 1  doctor@healthlens.demo   / demo1234        │');
+  console.log('│   └─ Clinic: Meridian Family Health                  │');
   console.log('│ DOCTOR 2  doctor2@healthlens.demo  / demo1234        │');
+  console.log('│   └─ Clinic: Okafor Cardiology Centre                │');
   console.log('│ PATIENT 1 patient@healthlens.demo  / demo1234        │');
   console.log('│ PATIENT 2 aiko@healthlens.demo     / demo1234        │');
   console.log('│ PATIENT 3 priya@healthlens.demo    / demo1234        │');

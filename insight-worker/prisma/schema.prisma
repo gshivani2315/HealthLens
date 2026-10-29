@@ -98,41 +98,29 @@ model Clinic {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  members     ClinicMember[]
+  // A clinic has many doctors, but each doctor belongs to exactly one clinic.
+  doctors     Doctor[]
   assignments CareAssignment[]
   invites     CareInvite[]
-}
-
-model ClinicMember {
-  id        String   @id @default(cuid())
-  doctorId  String
-  clinicId  String
-  role      String   @default("PHYSICIAN") // e.g. "PHYSICIAN", "SPECIALIST", "STAFF"
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  doctor Doctor @relation(fields: [doctorId], references: [id], onDelete: Cascade)
-  clinic Clinic @relation(fields: [clinicId], references: [id], onDelete: Cascade)
-
-  @@unique([doctorId, clinicId])
-  @@index([clinicId])
-  @@index([doctorId])
 }
 
 model Doctor {
   id         String   @id @default(cuid())
   userId     String   @unique
+  clinicId   String?  // FK to Clinic — the single clinic this doctor belongs to
   clinicName String?  // Legacy column preserved for backward compatibility
   phone      String?
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
   user               User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  clinic             Clinic?          @relation(fields: [clinicId], references: [id], onDelete: SetNull)
   patients           Patient[]        // Legacy relation preserved for backward compatibility
   acknowledgedAlerts Alert[]
-  clinicMemberships  ClinicMember[]
   careAssignments    CareAssignment[]
   careInvites        CareInvite[]
+
+  @@index([clinicId])
 }
 
 model CareAssignment {

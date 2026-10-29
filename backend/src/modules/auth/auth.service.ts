@@ -70,6 +70,15 @@ export async function registerDoctor(input: {
 
   let user;
   try {
+    // Create the Clinic first so Doctor.clinicId can reference it
+    const clinic = await prisma.clinic.create({
+      data: {
+        id: `clinic_${created.user.id}`,
+        name: input.clinicName || 'HealthLens Clinic',
+        phone: input.phone || null,
+      },
+    });
+
     user = await prisma.user.create({
       data: {
         id: created.user.id,
@@ -77,29 +86,16 @@ export async function registerDoctor(input: {
         email,
         password: 'SUPABASE_MANAGED_AUTH',
         role: 'DOCTOR',
-        doctor: { create: { clinicName: input.clinicName, phone: input.phone } },
+        doctor: {
+          create: {
+            clinicId:   clinic.id,
+            clinicName: input.clinicName, // legacy column kept
+            phone:      input.phone,
+          },
+        },
       },
       include: { doctor: true },
     });
-
-    // Create default Clinic and ClinicMember for this doctor
-    if (user.doctor) {
-      const clinic = await prisma.clinic.create({
-        data: {
-          id: `clinic_${user.doctor.id}`,
-          name: input.clinicName || 'HealthLens Clinic',
-          phone: input.phone || null,
-        },
-      });
-
-      await prisma.clinicMember.create({
-        data: {
-          doctorId: user.doctor.id,
-          clinicId: clinic.id,
-          role: 'PHYSICIAN',
-        },
-      });
-    }
   } catch (err) {
     await supabaseAdmin.auth.admin.deleteUser(created.user.id).catch(() => {});
     throw err;
