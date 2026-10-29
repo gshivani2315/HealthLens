@@ -26,6 +26,14 @@ export default function DoctorDashboard() {
   const [search, setSearch] = useState(params.get("q") ?? "");
   const [filter, setFilter] = useState<RosterFilter>("all");
 
+  // Keep search input synced when URL query param ?q= changes
+  useEffect(() => {
+    const q = params.get("q");
+    if (q !== null) {
+      setSearch(q);
+    }
+  }, [params]);
+
   // Modal states
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [isInviteOpen, setIsInviteOpen] = useState(false);
@@ -93,7 +101,20 @@ export default function DoctorDashboard() {
     let rows = overview.roster;
     if (filter === "critical") rows = rows.filter((r) => r.riskStatus === "critical");
     if (filter === "needs_review") rows = rows.filter((r) => r.riskStatus !== "normal");
-    if (search) rows = rows.filter((r) => r.name.toLowerCase().includes(search.toLowerCase()));
+    if (search.trim()) {
+      const q = search.trim().toLowerCase();
+      rows = rows.filter(
+        (r) =>
+          r.name.toLowerCase().includes(q) ||
+          r.id.toLowerCase().includes(q) ||
+          (r.email && r.email.toLowerCase().includes(q)) ||
+          (r.phone && r.phone.toLowerCase().includes(q)) ||
+          (r.primaryCondition && r.primaryCondition.toLowerCase().includes(q)) ||
+          (r.specialty && r.specialty.toLowerCase().includes(q)) ||
+          (r.clinicName && r.clinicName.toLowerCase().includes(q)) ||
+          (r.conditions && r.conditions.some((c) => c.label.toLowerCase().includes(q)))
+      );
+    }
     return rows;
   }, [overview, filter, search]);
 
@@ -371,8 +392,8 @@ export default function DoctorDashboard() {
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search by name"
-              className="input sm:w-56"
+              placeholder="Search by name, ID, email, condition..."
+              className="input sm:w-64"
             />
             <div className="flex flex-wrap gap-1 rounded-xl border border-line bg-paper p-1">
               {(
@@ -417,7 +438,12 @@ export default function DoctorDashboard() {
                 <tr key={p.id} className="table-row-hover border-b border-line/70 last:border-0 hover:bg-[#DDE7DF]">
                   <td className="px-4 py-4">
                     <p className="font-semibold text-ink">{p.name}</p>
-                    {p.email && <p className="text-xs text-ink-400">{p.email}</p>}
+                    <div className="flex items-center gap-2 text-xs text-ink-400">
+                      <span className="font-mono text-[11px] text-teal-700 bg-teal-50 px-1.5 py-0.5 rounded border border-teal-200">
+                        {p.id}
+                      </span>
+                      {p.email && <span>{p.email}</span>}
+                    </div>
                   </td>
                   <td className="px-4 py-4 text-xs text-ink-500">
                     <p className="font-medium text-ink">{p.specialty || "Primary Care"}</p>

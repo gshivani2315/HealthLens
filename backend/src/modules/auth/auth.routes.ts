@@ -3,6 +3,8 @@ import { Router } from 'express';
 import { prisma } from '../../db';
 import { changePassword, login, refresh, registerDoctor, registerPatient } from './auth.service';
 import { requireAuth } from '../../middleware/auth';
+import { revokeToken } from '../../lib/tokenBlacklist';
+import { supabaseAdmin } from '../../lib/supabase';
 
 const router = Router();
 
@@ -94,8 +96,24 @@ router.post('/register-patient', async (req, res, next) => {
   }
 });
 
-router.post('/logout', (_req, res) => {
-  res.json({ message: 'Logged out' });
+// Stateful logout: Revokes Bearer token in server blacklist and signs out of Supabase
+router.post('/logout', async (req, res) => {
+  try {
+    const header = req.headers.authorization;
+    if (header && header.startsWith('Bearer ')) {
+      const token = header.slice(7);
+      revokeToken(token);
+      // Attempt global or session signout on Supabase admin client if possible
+      try {
+        await supabaseAdmin.auth.admin.signOut(token);
+      } catch {
+        // Fallback: server blacklist already invalidates the token locally
+      }
+    }
+    res.json({ message: 'Logged out successfully' });
+  } catch {
+    res.json({ message: 'Logged out' });
+  }
 });
 
 router.get('/me', requireAuth, async (req, res, next) => {

@@ -279,3 +279,88 @@ This document provides a comprehensive record of all changes made across the Hea
 - `handoff.md` *(updated with multi-clinic ERD, token refresh sequence diagram, and architecture)*
 - `changes.md` *(created)*
 
+
+---
+
+## 9. Doctor Search Enhancement, Patient Vitals History View, and Stateful Logout
+
+### 1. Doctor Search Functionality (Search across name, ID, email, condition, phone, clinic)
+- **Problem**: The doctor's search input in both the top layout header and the roster table was previously restricted or failing to match against patient IDs, emails, conditions, or clinic specialties. Additionally, submitting the layout search bar (`/doctor/dashboard?q=...`) did not sync with the search input state when navigating.
+- **Backend Fix (`backend/src/modules/doctor/doctor.routes.ts`)**:
+  - Upgraded `GET /doctor/patients` search filter to query case-insensitively across:
+    - Patient Name (`user.name`)
+    - Patient ID (`id`)
+    - Email (`user.email`)
+    - Phone (`phone`)
+    - Chronic Conditions (`conditions.some.label`)
+- **Frontend Fix (`frontend/src/pages/doctor/Dashboard.tsx` & `patientsService.ts`)**:
+  - Added an active `useEffect` syncing URL query param `?q=` with the local `search` state so top-bar searches immediately filter the roster.
+  - Enhanced client-side `useMemo` search filter in `Dashboard.tsx` and `patientsService.ts` (`getRoster`) to match across name, ID, email, phone, condition label, care specialty, and clinic name.
+  - Displayed the patient ID badge prominently on each roster row under the patient's name (`font-mono text-[11px] text-teal-700 bg-teal-50 px-1.5 py-0.5 rounded border border-teal-200`) for quick reference.
+
+### 2. Patient Past Vitals History View
+- **Problem**: Patients could log vitals and view aggregated trends, but lacked a paginated tabular view to inspect their historical timestamped readings with exact values.
+- **Frontend Enhancement (`frontend/src/pages/patient/Trends.tsx`)**:
+  - Added view mode toggle between **"📈 Trends & Charts"** and **"📋 Reading History"**.
+  - Built a themed, responsive table displaying all past readings:
+    - Recorded At timestamp (`formatDateTime`)
+    - Blood pressure (systolic/diastolic in mmHg)
+    - Heart rate (bpm)
+    - Blood glucose with fasting/post-meal context badges
+    - Body weight (kg)
+    - Sleep duration (hrs)
+  - Integrated with `vitalsService.getVitalsLog(patientId, page, pageSize)` with complete pagination controls (`Previous` / `Next` with page count).
+  - Maintained complete styling consistency with the HealthLens design system (`#DDE7DF` header, `text-ink`, `border-line`, `table-row-hover`).
+
+### 3. Stateful Server-Side Logout & Token Revocation
+- **Problem**: Logout was purely stateless on the server; `POST /api/auth/logout` returned `{ message: 'Logged out' }` without invalidating the active Bearer token on the server.
+- **Backend Implementation (`backend/src/lib/tokenBlacklist.ts`, `auth.ts`, `auth.routes.ts`)**:
+  - Created `backend/src/lib/tokenBlacklist.ts` providing an in-memory token revocation blacklist (`revokeToken`, `isTokenRevoked`) with bounded memory management.
+  - Updated `requireAuth` in `backend/src/middleware/auth.ts` to reject any incoming Bearer token present in the revocation list with `401 Token has been revoked, please sign in again`.
+  - Updated `POST /api/auth/logout` in `backend/src/modules/auth/auth.routes.ts` to extract the caller's Bearer token, add it to the server revocation list, and trigger administrative session termination via `supabaseAdmin.auth.admin.signOut(token)`.
+  - Stored token in `req.user.token` during auth middleware execution for downstream auditability.
+
+
+---
+
+## Session — 2026-10-29: Schema Drift Fix (`clinicMemberships` → `clinic`)
+
+### Problem
+`doctor.routes.ts` still referenced the removed `ClinicMember` join table (`clinicMemberships`) in three places after the schema was updated to use a direct `Doctor.clinicId` → `Clinic` relation. This caused a `PrismaClientValidationError` on every authenticated doctor request, crashing the entire doctor portal.
+
+### Root Cause
+The schema was changed (removed `ClinicMember`, added `Doctor.clinicId`) but the route file was not fully updated in a previous session. References remained in:
+1. `DoctorRecord` TypeScript type definition
+2. `router.use` middleware (fetching doctor profile on every request)
+3. `buildProfile` helper function
+4. `GET /clinics` route (queried `prisma.clinicMember.findMany`)
+5. `POST /clinics` route (called `prisma.clinicMember.create`)
+6. `POST /patients` route (read `doctor.clinicMemberships?.[0]?.clinicId`)
+7. `PATCH /profile` route (read `updated.clinicMemberships?.[0]`)
+
+### Files Changed
+
+#### `backend/src/modules/doctor/doctor.routes.ts` — Full rewrite
+- **`DoctorRecord` type**: Changed `clinicMemberships: { include: { clinic: true } }` → `clinic: true`.
+- **`router.use` middleware**: Updated `prisma.doctor.findUnique` include to `{ user: true, clinic: true }`.
+- **`buildProfile`**: Changed `doctor.clinicMemberships?.[0]?.clinic` → `doctor.clinic` for `primaryClinic`.
+- **`GET /clinics`**: Replaced `prisma.clinicMember.findMany` with `prisma.clinic.findUnique({ where: { id: doctor.clinicId } })`. Returns the single doctor clinic as a one-element array.
+- **`POST /clinics`**: Replaced `prisma.clinicMember.create` with `prisma.doctor.update({ data: { clinicId, clinicName } })`.
+- **`POST /patients`**: Changed `doctor.clinicMemberships?.[0]?.clinicId` → `doctor.clinicId` when building the `CareAssignment`.
+- **`PATCH /profile`**: Changed `updated.clinicMemberships?.[0]?.clinicId` → `updated.clinicId` for clinic name sync; changed response to use `updated.clinic?.name ?? updated.clinicName`.
+
+#### `backend/prisma/seed.ts` — Added Supabase Auth user creation
+- Added `upsertSupabaseUser()` helper that calls `supabaseAdmin.auth.admin.createUser` with `email_confirm: true` and correct `app_metadata.role`.
+- If a user already exists in Supabase Auth, the helper lists users, finds by email, and updates the password to ensure demo credentials are always `demo1234`.
+- If the Prisma `User` row has a different `id` than the Supabase Auth `id` (because it was previously seeded without Supabase), the seed migrates the `id` to match Supabase Auth (so `provisionUser` can find it on login).
+- Added `CareAssignment` seeding for each patient→doctor link.
+- Added `Clinic` upsert for the demo clinic (`Meridian Family Health`), linking it to `Doctor.clinicId`.
+- All operations remain idempotent (`upsert` on unique constraints).
+
+### Demo Accounts (post-fix, all password: `demo1234`)
+| Email | Role | Name |
+|---|---|---|
+| `doctor@healthlens.demo` | DOCTOR | Dr. Elena Ruiz |
+| `patient@healthlens.demo` | PATIENT | Marcus Bell |
+| `aiko@healthlens.demo` | PATIENT | Aiko Tanaka |
+| `priya@healthlens.demo` | PATIENT | Priya Nair |

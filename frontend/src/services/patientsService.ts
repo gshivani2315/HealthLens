@@ -62,7 +62,18 @@ export const patientsService = {
       let roster = getRoster(doctorId);
       if (filter === "critical") roster = roster.filter((r) => r.riskStatus === "critical");
       if (filter === "needs_review") roster = roster.filter((r) => r.riskStatus !== "normal");
-      if (search) roster = roster.filter((r) => r.name.toLowerCase().includes(search.toLowerCase()));
+      if (search.trim()) {
+        const q = search.trim().toLowerCase();
+        roster = roster.filter(
+          (r) =>
+            r.name.toLowerCase().includes(q) ||
+            r.id.toLowerCase().includes(q) ||
+            (r.email && r.email.toLowerCase().includes(q)) ||
+            (r.phone && r.phone.toLowerCase().includes(q)) ||
+            (r.primaryCondition && r.primaryCondition.toLowerCase().includes(q)) ||
+            (r.conditions && r.conditions.some((c) => c.label.toLowerCase().includes(q)))
+        );
+      }
       return mockDelay(roster);
     }
     const params = new URLSearchParams();
@@ -135,7 +146,7 @@ export const patientsService = {
     return apiClient.patch<Doctor>("/doctor/profile", updates);
   },
 
-  // ── Clinics & Memberships ──
+  // Clinics APIs
   async getClinics(): Promise<Clinic[]> {
     if (USE_MOCKS) {
       return mockDelay([
@@ -143,8 +154,7 @@ export const patientsService = {
           id: "clinic_001",
           name: "Meridian Family Health",
           phone: "+1 (555) 019-2231",
-          address: "1200 Healthcare Blvd, Suite 400",
-          role: "PHYSICIAN",
+          address: "100 Medical Center Way, Suite 400",
           activePatientsCount: 6,
           staffCount: 3,
         },
@@ -153,82 +163,71 @@ export const patientsService = {
     return apiClient.get<Clinic[]>("/doctor/clinics");
   },
 
-  async createClinic(payload: { name: string; phone?: string; address?: string }): Promise<Clinic> {
+  async createClinic(data: { name: string; phone?: string; address?: string }): Promise<Clinic> {
     if (USE_MOCKS) {
       return mockDelay({
         id: `clinic_${Date.now()}`,
-        name: payload.name,
-        phone: payload.phone,
-        address: payload.address,
-        role: "PHYSICIAN",
+        name: data.name,
+        phone: data.phone,
+        address: data.address,
         activePatientsCount: 0,
         staffCount: 1,
       });
     }
-    return apiClient.post<Clinic>("/doctor/clinics", payload);
+    return apiClient.post<Clinic>("/doctor/clinics", data);
   },
 
-  // ── Invites (Patient Self-registration linking) ──
+  // Care Invites APIs
+  async createCareInvite(data: { specialty?: string; patientEmail?: string; daysValid?: number }): Promise<CareInvite> {
+    if (USE_MOCKS) {
+      return mockDelay({
+        id: `inv_${Date.now()}`,
+        code: `HL-${Math.random().toString(36).substring(2, 6).toUpperCase()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`,
+        doctorId: "doc_001",
+        clinicId: "clinic_001",
+        specialty: data.specialty || "Primary Care",
+        patientEmail: data.patientEmail,
+        status: "PENDING",
+        expiresAt: new Date(Date.now() + (data.daysValid || 14) * 86400000).toISOString(),
+        createdAt: new Date().toISOString(),
+      });
+    }
+    return apiClient.post<CareInvite>("/invites", data);
+  },
+
+  async acceptCareInvite(code: string): Promise<{ message: string; assignmentId: string }> {
+    if (USE_MOCKS) {
+      return mockDelay({
+        message: "Care invite accepted successfully",
+        assignmentId: `ca_${Date.now()}`,
+      });
+    }
+    return apiClient.post<{ message: string; assignmentId: string }>("/invites/accept", { code });
+  },
+
   async getDoctorInvites(): Promise<CareInvite[]> {
     if (USE_MOCKS) {
-      return mockDelay([
-        {
-          id: "inv_1",
-          code: "HL-DEMO-2026",
-          doctorId: "doc_001",
-          doctorName: "Dr. Elena Ruiz",
-          specialty: "Primary Care",
-          status: "PENDING",
-          expiresAt: new Date(Date.now() + 7 * 86400000).toISOString(),
-          createdAt: new Date().toISOString(),
-        },
-      ]);
+      return mockDelay([]);
     }
     return apiClient.get<CareInvite[]>("/invites");
   },
 
-  async createCareInvite(payload: {
-    clinicId?: string;
-    specialty?: string;
-    patientEmail?: string;
-    daysValid?: number;
-  }): Promise<CareInvite> {
-    if (USE_MOCKS) {
-      const code = `HL-${Math.random().toString(36).substring(2, 6).toUpperCase()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
-      return mockDelay({
-        id: `inv_${Date.now()}`,
-        code,
-        doctorId: "doc_001",
-        doctorName: "Dr. Elena Ruiz",
-        specialty: payload.specialty || "Primary Care",
-        patientEmail: payload.patientEmail,
-        status: "PENDING",
-        expiresAt: new Date(Date.now() + (payload.daysValid || 14) * 86400000).toISOString(),
-        createdAt: new Date().toISOString(),
-      });
-    }
-    return apiClient.post<CareInvite>("/invites", payload);
-  },
-
-  async acceptCareInvite(code: string): Promise<any> {
-    if (USE_MOCKS) {
-      return mockDelay({ success: true, message: "Connected to doctor" });
-    }
-    return apiClient.post<any>("/invites/accept", { code });
-  },
-
-  // ── Manual Weekly Summary Trigger ──
-  async generateWeeklySummary(patientId: string): Promise<WeeklySummary> {
+  // Manual trigger for on-demand weekly summary generation
+  async triggerPatientSummary(patientId: string): Promise<WeeklySummary> {
     if (USE_MOCKS) {
       await mockDelay(undefined, 800);
       return {
         id: `sum_${Date.now()}`,
         patientId,
-        weekStart: new Date().toISOString(),
+        weekStart: new Date(Date.now() - 7 * 86400000).toISOString(),
         weekEnd: new Date().toISOString(),
         generatedAt: new Date().toISOString(),
-        narrative: "Manual summary generated. Patient vitals tracking within targets.",
-        takeaways: ["Readings steady", "Manual clinical assessment completed"],
+        narrative:
+          "Manual weekly summary generated on demand. Vitals over the selected period show consistent morning logging with systolic readings remaining well-controlled. Glucose stability remains optimal.",
+        takeaways: [
+          "Good adherence to daily logging schedule.",
+          "Continue monitoring morning blood pressure before meals.",
+        ],
       };
     }
     return apiClient.post<WeeklySummary>(`/doctor/patients/${patientId}/generate-summary`);

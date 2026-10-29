@@ -18,7 +18,7 @@ const router = Router();
 type DoctorRecord = Prisma.DoctorGetPayload<{
   include: {
     user: true;
-    clinicMemberships: { include: { clinic: true } };
+    clinic: true;
   };
 }>;
 
@@ -29,7 +29,7 @@ router.use(requireAuth, requireRole('DOCTOR'), async (req, res, next) => {
       where: { userId: req.user!.dbUserId },
       include: {
         user: true,
-        clinicMemberships: { include: { clinic: true } },
+        clinic: true,
       },
     });
     if (!doctor) return res.status(403).json({ message: 'Doctor profile not found for this account' });
@@ -137,7 +137,7 @@ function buildProfile(
 ) {
   const activeAssignments = (p.careAssignments || []).filter((a: any) => a.status === 'ACTIVE');
   const thisAssignment = activeAssignments.find((a: any) => a.doctorId === doctor.id);
-  const primaryClinic = doctor.clinicMemberships?.[0]?.clinic;
+  const primaryClinic = doctor.clinic;
 
   return {
     id: p.id,
@@ -219,29 +219,24 @@ function parseInitialVitals(b: any): VitalsParse {
 router.get('/clinics', async (_req, res, next) => {
   try {
     const doctor = doc(res);
-    const memberships = await prisma.clinicMember.findMany({
-      where: { doctorId: doctor.id },
+    if (!doctor.clinicId) return res.json([]);
+    const clinic = await prisma.clinic.findUnique({
+      where: { id: doctor.clinicId },
       include: {
-        clinic: {
-          include: {
-            members: { include: { doctor: { include: { user: true } } } },
-            assignments: { where: { status: 'ACTIVE' } },
-          },
-        },
+        doctors: { include: { user: true } },
+        assignments: { where: { status: 'ACTIVE' } },
       },
     });
-
-    res.json(
-      memberships.map((m: any) => ({
-        id: m.clinic.id,
-        name: m.clinic.name,
-        role: m.role,
-        phone: m.clinic.phone,
-        address: m.clinic.address,
-        activePatientsCount: m.clinic.assignments?.length ?? 0,
-        staffCount: m.clinic.members?.length ?? 0,
-      }))
-    );
+    if (!clinic) return res.json([]);
+    return res.json([{
+      id: clinic.id,
+      name: clinic.name,
+      role: 'PHYSICIAN',
+      phone: clinic.phone,
+      address: clinic.address,
+      activePatientsCount: clinic.assignments?.length ?? 0,
+      staffCount: clinic.doctors?.length ?? 0,
+    }]);
   } catch (err) {
     next(err);
   }
@@ -250,7 +245,7 @@ router.get('/clinics', async (_req, res, next) => {
 router.post('/clinics', async (req, res, next) => {
   try {
     const doctor = doc(res);
-    const { name, phone, address, role } = req.body ?? {};
+    const { name, phone, address } = req.body ?? {};
     if (!name || typeof name !== 'string') {
       return res.status(400).json({ message: 'Clinic name is required' });
     }
@@ -263,11 +258,11 @@ router.post('/clinics', async (req, res, next) => {
       },
     });
 
-    await prisma.clinicMember.create({
+    await prisma.doctor.update({
+      where: { id: doctor.id },
       data: {
-        doctorId: doctor.id,
         clinicId: clinic.id,
-        role: role ? String(role).trim() : 'PHYSICIAN',
+        clinicName: clinic.name,
       },
     });
 
@@ -333,7 +328,15 @@ router.get('/patients', async (req, res, next) => {
       id: { in: patientIds },
     };
 
-    if (search) where.user = { name: { contains: search, mode: 'insensitive' } };
+    if (search) {
+      where.OR = [
+        { user: { name: { contains: search, mode: 'insensitive' } } },
+        { user: { email: { contains: search, mode: 'insensitive' } } },
+        { id: { contains: search, mode: 'insensitive' } },
+        { phone: { contains: search, mode: 'insensitive' } },
+        { conditions: { some: { label: { contains: search, mode: 'insensitive' } } } },
+      ];
+    }
     if (filter === 'critical') where.riskStatus = 'CRITICAL';
     else if (filter === 'needs_review') where.riskStatus = { not: 'NORMAL' };
 
@@ -373,7 +376,7 @@ router.post('/patients', async (req, res, next) => {
     const risk = toRiskEnum(b.riskStatus) ?? RiskStatus.NORMAL;
 
     // Determine clinic for care assignment
-    const clinicId = b.clinicId || doctor.clinicMemberships?.[0]?.clinicId || `clinic_${doctor.id}`;
+    const clinicId = b.clinicId || doctor.clinicId || undefined;
     const specialty = typeof b.specialty === 'string' && b.specialty.trim() ? b.specialty.trim() : 'Primary Care';
 
     const tempPassword = generateTempPassword();
@@ -422,7 +425,7 @@ router.post('/patients', async (req, res, next) => {
           data: {
             patientId: patient.id,
             doctorId: doctor.id,
-            clinicId,
+            ...(clinicId ? { clinicId } : {}),
             specialty,
             status: 'ACTIVE',
             assignedAt: new Date(),
@@ -690,14 +693,14 @@ router.patch('/profile', async (req, res, next) => {
       },
       include: {
         user: true,
-        clinicMemberships: { include: { clinic: true } },
+        clinic: true,
       },
     });
 
     // If clinicName was updated and doctor has a primary clinic, keep clinic name synchronized
-    if (typeof clinicName === 'string' && clinicName.trim() && updated.clinicMemberships?.[0]?.clinicId) {
+    if (typeof clinicName === 'string' && clinicName.trim() && updated.clinicId) {
       await prisma.clinic.update({
-        where: { id: updated.clinicMemberships[0].clinicId },
+        where: { id: updated.clinicId },
         data: { name: clinicName.trim() },
       });
     }
@@ -706,7 +709,7 @@ router.patch('/profile', async (req, res, next) => {
       id: updated.id,
       name: updated.user.name,
       email: updated.user.email,
-      clinicName: updated.clinicMemberships?.[0]?.clinic?.name ?? updated.clinicName,
+      clinicName: updated.clinic?.name ?? updated.clinicName,
       phone: updated.phone,
     });
   } catch (err) {

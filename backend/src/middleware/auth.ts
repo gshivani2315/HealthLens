@@ -1,13 +1,15 @@
-// backend/src/middleware/auth.ts   (replaces current)
+// backend/src/middleware/auth.ts
 import type { Request, Response, NextFunction } from 'express';
 import { supabaseAdmin } from '../lib/supabase';
 import { provisionUser } from '../lib/provision';
+import { isTokenRevoked } from '../lib/tokenBlacklist';
 
 export interface AuthedUser {
   sub: string;
   email?: string;
   role: 'PATIENT' | 'DOCTOR';
   dbUserId: string;
+  token?: string;
 }
 
 declare global {
@@ -28,6 +30,11 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
     }
     const token = header.slice(7);
 
+    // Check server revocation list (stateful logout)
+    if (isTokenRevoked(token)) {
+      return res.status(401).json({ message: 'Token has been revoked, please sign in again' });
+    }
+
     const { data, error } = await supabaseAdmin.auth.getUser(token);
     if (error || !data.user) {
       const status = (error as any)?.status;
@@ -44,6 +51,7 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
       email: data.user.email,
       role: dbUser.role as 'PATIENT' | 'DOCTOR',
       dbUserId: dbUser.id,
+      token,
     };
     next();
   } catch (err: any) {
