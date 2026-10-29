@@ -108,8 +108,8 @@ export default function PatientDashboard() {
               { label: "Blood glucose", value: metrics.glucose.value, unit: metrics.glucose.unit, icon: "◉" },
               { label: "Weight", value: metrics.weight.value, unit: metrics.weight.unit, icon: "↕" },
               { label: "Sleep", value: metrics.sleep.value, unit: metrics.sleep.unit, icon: "☾" },
-              { label: "Heart rate", value: metrics.heartRate?.value ?? 72, unit: "bpm", icon: "♥" },
-              { label: "Blood pressure", value: `${metrics.bloodPressure.systolic}/${metrics.bloodPressure.diastolic}`, unit: "mmHg", icon: "⌁", span: "col-span-2" },
+              { label: "Heart rate", value: metrics.heartRate?.value, unit: "bpm", icon: "♥" },
+              { label: "Blood pressure", value: `${metrics.bloodPressure.systolic}/${metrics.bloodPressure.diastolic}`, unit: "mmHg", icon: "*", span: "col-span-2" },
             ].map((item) => (
               <div
                 key={item.label}

@@ -256,6 +256,32 @@ router.patch('/:id/profile', requireAuth, async (req, res, next) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /patients/:id/dashboard
 // ─────────────────────────────────────────────────────────────────────────────
+
+type NumericVitalKey = 'systolic' | 'diastolic' | 'glucose' | 'weightKg' | 'sleepHours' | 'heartRate';
+
+const round1 = (n: number) => Math.round(n * 10) / 10;
+
+/** Mean of the non-null values for a field, or null if there are none. */
+function meanOf(rows: Array<Partial<Record<NumericVitalKey, number | null>>>, key: NumericVitalKey): number | null {
+  const values = rows
+    .map((r) => r[key])
+    .filter((v): v is number => typeof v === 'number' && Number.isFinite(v));
+  if (values.length === 0) return null;
+  return values.reduce((sum, v) => sum + v, 0) / values.length;
+}
+
+/** Latest value minus prior-week mean. Null unless both sides exist. */
+function deltaVsAvg(
+  latestValue: number | null | undefined,
+  priorRows: Array<Partial<Record<NumericVitalKey, number | null>>>,
+  key: NumericVitalKey
+): number | null {
+  if (typeof latestValue !== 'number' || !Number.isFinite(latestValue)) return null;
+  const mean = meanOf(priorRows, key);
+  if (mean === null) return null;
+  return round1(latestValue - mean);
+}
+
 router.get('/:id/dashboard', requireAuth, async (req, res, next) => {
   try {
     const patientResult = await resolvePatientWithAuth(req.params.id, req.user);
@@ -269,7 +295,7 @@ router.get('/:id/dashboard', requireAuth, async (req, res, next) => {
 
     const patient = patientResult;
 
-    // Fetch last 14 days of vitals
+    // Last 14 readings, newest first
     const vitals = await prisma.vital.findMany({
       where: { patientId: patient.id },
       orderBy: { recordedAt: 'desc' },
@@ -279,16 +305,8 @@ router.get('/:id/dashboard', requireAuth, async (req, res, next) => {
     const latest = vitals[0] ?? null;
     const priorWeek = vitals.slice(1, 8);
 
-    const avg = (key: 'systolic' | 'glucose' | 'weightKg' | 'sleepHours' | 'heartRate') => {
-      const valid = priorWeek.filter((v) => v[key] != null);
-      if (valid.length === 0) return 0;
-      return valid.reduce((sum, v) => sum + (Number(v[key]) || 0), 0) / valid.length;
-    };
-
     const now = new Date();
-    const isToday = latest
-      ? new Date(latest.recordedAt).toDateString() === now.toDateString()
-      : false;
+    const isToday = latest ? latest.recordedAt.toDateString() === now.toDateString() : false;
 
     const alerts = await prisma.alert.findMany({
       where: { patientId: patient.id },
@@ -296,18 +314,31 @@ router.get('/:id/dashboard', requireAuth, async (req, res, next) => {
       take: 5,
     });
 
+    // Sparkline: only real values. Missing fields stay null, never invented.
     const sparkline = vitals
       .slice(0, 7)
       .reverse()
       .map((v) => ({
         date: v.recordedAt.toISOString(),
-        systolic: v.systolic ?? 120,
-        diastolic: v.diastolic ?? 80,
-        glucose: v.glucose ?? 100,
-        heartRate: v.heartRate ?? 72,
+        systolic: v.systolic ?? null,
+        diastolic: v.diastolic ?? null,
+        glucose: v.glucose ?? null,
+        heartRate: v.heartRate ?? null,
       }));
 
     const primaryAssignment = patient.careAssignments?.[0];
+
+    const metric = (
+      key: NumericVitalKey,
+      label: string,
+      unit: string,
+      value: number | null | undefined
+    ) => ({
+      value: typeof value === 'number' ? value : null,
+      changeVsWeekAvg: deltaVsAvg(value, priorWeek, key),
+      unit,
+      label,
+    });
 
     res.json({
       patientName: patient.user.name,
@@ -332,39 +363,21 @@ router.get('/:id/dashboard', requireAuth, async (req, res, next) => {
           }
         : null,
       vitalsLoggedToday: isToday,
+      latestReadingAt: latest ? latest.recordedAt.toISOString() : null,
+      hasData: vitals.length > 0,
       metrics: {
         bloodPressure: {
-          value: latest?.systolic ?? 120,
-          systolic: latest?.systolic ?? 120,
-          diastolic: latest?.diastolic ?? 80,
-          changeVsWeekAvg: latest?.systolic ? Number((latest.systolic - avg('systolic')).toFixed(1)) : 0,
+          value: latest?.systolic ?? null,
+          systolic: latest?.systolic ?? null,
+          diastolic: latest?.diastolic ?? null,
+          changeVsWeekAvg: deltaVsAvg(latest?.systolic, priorWeek, 'systolic'),
           unit: 'mmHg',
           label: 'Blood pressure',
         },
-        glucose: {
-          value: latest?.glucose ?? 100,
-          changeVsWeekAvg: latest?.glucose ? Number((latest.glucose - avg('glucose')).toFixed(1)) : 0,
-          unit: 'mg/dL',
-          label: 'Blood glucose',
-        },
-        weight: {
-          value: latest?.weightKg ?? 70,
-          changeVsWeekAvg: latest?.weightKg ? Number((latest.weightKg - avg('weightKg')).toFixed(1)) : 0,
-          unit: 'kg',
-          label: 'Weight',
-        },
-        sleep: {
-          value: latest?.sleepHours ?? 7,
-          changeVsWeekAvg: latest?.sleepHours ? Number((latest.sleepHours - avg('sleepHours')).toFixed(1)) : 0,
-          unit: 'hrs',
-          label: 'Sleep',
-        },
-        heartRate: {
-          value: latest?.heartRate ?? 72,
-          changeVsWeekAvg: latest?.heartRate ? Number((latest.heartRate - avg('heartRate')).toFixed(1)) : 0,
-          unit: 'bpm',
-          label: 'Heart rate',
-        },
+        glucose: metric('glucose', 'Blood glucose', 'mg/dL', latest?.glucose),
+        weight: metric('weightKg', 'Weight', 'kg', latest?.weightKg),
+        sleep: metric('sleepHours', 'Sleep', 'hrs', latest?.sleepHours),
+        heartRate: metric('heartRate', 'Heart rate', 'bpm', latest?.heartRate),
       },
       aiInsight: patient.insight
         ? {
