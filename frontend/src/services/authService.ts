@@ -1,10 +1,6 @@
-// Backend contract:
-//   POST /auth/login        { email, password }        -> { token, user }
-//   POST /auth/logout       -                            -> 204
-//   GET  /auth/me           (bearer token)                -> { user }
-
+// frontend/src/services/authService.ts
 import { apiClient, mockDelay, USE_MOCKS } from "./apiClient";
-import { AuthResponse, AuthUser, DoctorRegisterPayload, LoginPayload } from "@/types";
+import { AuthResponse, AuthUser, DoctorRegisterPayload, PatientRegisterPayload, LoginPayload } from "@/types";
 import { registerDoctorMock } from "./mockData";
 
 const mockUsers: Record<string, { user: AuthUser; password: string }> = {
@@ -60,6 +56,29 @@ export const authService = {
       return { token: `mock-token-${newDoctorId}`, user: newUser };
     }
     return apiClient.post<AuthResponse>("/auth/register-doctor", payload);
+  },
+
+  async registerPatient(payload: PatientRegisterPayload): Promise<AuthResponse> {
+    if (USE_MOCKS) {
+      await mockDelay(undefined, 400);
+      const emailLower = payload.email.toLowerCase();
+      if (mockUsers[emailLower]) {
+        throw new Error("An account with this email already exists");
+      }
+      const newPatientId = `pat_${Date.now()}`;
+      const newUser: AuthUser = {
+        id: newPatientId,
+        role: "patient",
+        name: payload.name,
+        email: payload.email,
+      };
+      mockUsers[emailLower] = {
+        password: payload.password,
+        user: newUser,
+      };
+      return { token: `mock-token-${newPatientId}`, user: newUser };
+    }
+    return apiClient.post<AuthResponse>("/auth/register-patient", payload);
   },
 
   async logout(): Promise<void> {

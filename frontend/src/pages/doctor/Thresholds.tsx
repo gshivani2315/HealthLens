@@ -32,7 +32,7 @@ export default function Thresholds() {
     try {
       const saved = await thresholdsService.save(id, config);
       setConfig(saved);
-      showToast("Thresholds saved");
+      showToast("Thresholds saved successfully");
     } catch (err) {
       showToast(err instanceof Error ? err.message : "Couldn't save thresholds", "error");
     } finally {
@@ -55,8 +55,11 @@ export default function Thresholds() {
   return (
     <div className="mx-auto max-w-2xl space-y-6">
       <div>
-        <h1 className="font-display text-xl font-semibold text-ink">Threshold &amp; monitoring configuration</h1>
-        <p className="text-sm text-ink-400">Baselines for {patientName}</p>
+        <h1 className="font-display text-xl font-semibold text-ink">Threshold &amp; Monitoring Configuration</h1>
+        <p className="text-sm text-ink-400">
+          Shared telemetry targets for <span className="font-semibold text-ink">{patientName}</span>.
+          Changes are unified across all active doctors caring for this patient.
+        </p>
       </div>
 
       <Card as="form" onSubmit={handleSubmit} className="space-y-6">
@@ -76,6 +79,26 @@ export default function Thresholds() {
           </div>
           <p className="mt-2 text-xs text-ink-400">
             Trigger an immediate alert if systolic exceeds {config.systolicMax} or diastolic exceeds {config.diastolicMax} mmHg.
+          </p>
+        </fieldset>
+
+        {/* Heart Rate Thresholds */}
+        <fieldset>
+          <legend className="mb-2 text-sm font-semibold text-ink">Heart Rate limits (bpm)</legend>
+          <div className="grid grid-cols-2 gap-3">
+            <NumberField
+              label="Bradycardia low limit"
+              value={config.heartRateMin ?? 50}
+              onChange={(v) => update("heartRateMin", v)}
+            />
+            <NumberField
+              label="Tachycardia high limit"
+              value={config.heartRateMax ?? 120}
+              onChange={(v) => update("heartRateMax", v)}
+            />
+          </div>
+          <p className="mt-2 text-xs text-ink-400">
+            Trigger alert if resting heart rate falls below {config.heartRateMin ?? 50} or exceeds {config.heartRateMax ?? 120} bpm.
           </p>
         </fieldset>
 

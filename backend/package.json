@@ -7,7 +7,10 @@
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
     "start": "node dist/server.js",
-    "seed": "tsx prisma/seed.ts"
+    "seed": "tsx prisma/seed.ts",
+    "db:migrate": "tsx scripts/migrate-db.ts",
+    "db:seed-new": "tsx prisma/seed-new-schema.ts",
+    "db:seed-full": "tsx prisma/seed-full.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",

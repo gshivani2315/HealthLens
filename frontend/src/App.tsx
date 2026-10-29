@@ -3,6 +3,7 @@ import { AuthProvider, useAuth } from "@/context/AuthContext";
 import { ToastProvider } from "@/context/ToastContext";
 import ProtectedRoute from "@/routes/ProtectedRoute";
 import LoginPage from "@/pages/LoginPage";
+import ChatPage from "@/pages/ChatPage";
 import PatientLayout from "@/components/layout/PatientLayout";
 import PatientDashboard from "@/pages/patient/Dashboard";
 import LogVitals from "@/pages/patient/LogVitals";
@@ -34,6 +35,7 @@ export default function App() {
           <Route path="/login" element={<LoginPage />} />
           <Route path="/register" element={<LoginPage defaultMode="register" />} />
           <Route path="/register/doctor" element={<LoginPage defaultMode="register" />} />
+          <Route path="/register/patient" element={<LoginPage defaultMode="register" />} />
 
           <Route element={<ProtectedRoute role="patient" />}>
             <Route element={<PatientLayout />}>
@@ -41,6 +43,7 @@ export default function App() {
               <Route path="/patient/log-vitals" element={<LogVitals />} />
               <Route path="/patient/trends" element={<Trends />} />
               <Route path="/patient/insights" element={<Insights />} />
+              <Route path="/patient/chat" element={<ChatPage />} />
               <Route path="/patient/profile" element={<Profile />} />
               <Route path="/patient/settings" element={<PatientSettings />} />
             </Route>
@@ -54,6 +57,7 @@ export default function App() {
               <Route path="/doctor/patients/:id" element={<PatientDetail />} />
               <Route path="/doctor/patients/:id/thresholds" element={<Thresholds />} />
               <Route path="/doctor/alerts" element={<Alerts />} />
+              <Route path="/doctor/chat" element={<ChatPage />} />
             </Route>
           </Route>
 

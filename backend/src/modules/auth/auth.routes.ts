@@ -1,7 +1,7 @@
-// backend/src/modules/auth/auth.routes.ts   (replaces current)
+// backend/src/modules/auth/auth.routes.ts
 import { Router } from 'express';
 import { prisma } from '../../db';
-import { changePassword, login, refresh, registerDoctor } from './auth.service';
+import { changePassword, login, refresh, registerDoctor, registerPatient } from './auth.service';
 import { requireAuth } from '../../middleware/auth';
 
 const router = Router();
@@ -66,6 +66,34 @@ async function registerHandler(req: any, res: any, next: any, defaultClinic?: st
 router.post('/register-doctor', (req, res, next) => registerHandler(req, res, next));
 router.post('/register', (req, res, next) => registerHandler(req, res, next, 'HealthLens Clinic'));
 
+// Self-registration: POST /auth/register-patient
+router.post('/register-patient', async (req, res, next) => {
+  try {
+    const { name, email, password, phone, dateOfBirth, gender, inviteCode } = req.body ?? {};
+    if (!name || !email || !password) {
+      return res.status(400).json({ message: 'Name, email, and password are required' });
+    }
+    if (typeof password !== 'string' || password.length < MIN_PASSWORD) {
+      return res.status(400).json({ message: `Password must be at least ${MIN_PASSWORD} characters long` });
+    }
+
+    const result = await registerPatient({
+      name,
+      email,
+      password,
+      phone,
+      dateOfBirth,
+      gender,
+      inviteCode,
+    });
+
+    res.status(201).json(result);
+  } catch (err: any) {
+    if (err.message?.includes('already exists')) return res.status(409).json({ message: err.message });
+    next(err);
+  }
+});
+
 router.post('/logout', (_req, res) => {
   res.json({ message: 'Logged out' });
 });
@@ -74,17 +102,51 @@ router.get('/me', requireAuth, async (req, res, next) => {
   try {
     const user = await prisma.user.findUnique({
       where: { id: req.user!.dbUserId },
-      include: { doctor: true, patient: true },
+      include: {
+        doctor: {
+          include: {
+            clinicMemberships: {
+              include: { clinic: true },
+            },
+          },
+        },
+        patient: {
+          include: {
+            careAssignments: {
+              where: { status: 'ACTIVE' },
+              include: {
+                doctor: { include: { user: true } },
+                clinic: true,
+              },
+            },
+          },
+        },
+      },
     });
     if (!user) return res.status(404).json({ message: 'User not found' });
+
+    const primaryClinic = user.doctor?.clinicMemberships?.[0]?.clinic;
     res.json({
       id: user.id,
       email: user.email,
       name: user.name,
       role: user.role.toLowerCase() as 'patient' | 'doctor',
-      // The doctor profile page reads these from /auth/me
-      clinicName: user.doctor?.clinicName ?? undefined,
+      clinicName: primaryClinic?.name ?? user.doctor?.clinicName ?? undefined,
       phone: user.doctor?.phone ?? user.patient?.phone ?? undefined,
+      clinics: user.doctor?.clinicMemberships?.map((cm) => ({
+        id: cm.clinic.id,
+        name: cm.clinic.name,
+        role: cm.role,
+        phone: cm.clinic.phone,
+        address: cm.clinic.address,
+      })),
+      activeDoctors: user.patient?.careAssignments?.map((ca) => ({
+        assignmentId: ca.id,
+        doctorId: ca.doctorId,
+        doctorName: ca.doctor.user.name,
+        specialty: ca.specialty,
+        clinicName: ca.clinic?.name,
+      })),
     });
   } catch (err) {
     next(err);
@@ -98,13 +160,12 @@ router.patch('/password', requireAuth, async (req, res, next) => {
       return res.status(400).json({ message: 'Current password and new password are required' });
     }
     if (typeof newPassword !== 'string' || newPassword.length < MIN_PASSWORD) {
-      return res.status(400).json({ message: `New password must be at least ${MIN_PASSWORD} characters long` });
+      return res.status(400).json({ message: `Password must be at least ${MIN_PASSWORD} characters long` });
     }
-
-    const outcome = await changePassword(req.user!.dbUserId, String(currentPassword), newPassword);
-    if (outcome === 'not_found') return res.status(404).json({ message: 'User not found' });
-    if (outcome === 'wrong_password') return res.status(400).json({ message: 'Current password is incorrect' });
-
+    const status = await changePassword(req.user!.dbUserId, currentPassword, newPassword);
+    if (status === 'wrong_password') {
+      return res.status(400).json({ message: 'Current password is incorrect' });
+    }
     res.json({ message: 'Password updated successfully' });
   } catch (err) {
     next(err);

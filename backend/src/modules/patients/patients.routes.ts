@@ -4,6 +4,7 @@ import { requireAuth } from '../../middleware/auth';
 import { publishVitalLoggedEvent } from '../../kafka/producer';
 import { GlucoseContext } from '@prisma/client';
 import { alertForDoctor, alertForPatient } from '../alerts/alertSerializer';
+import { hasActiveCareAssignment } from '../../middleware/accessGuard';
 
 const router = Router();
 
@@ -14,26 +15,6 @@ function toLowerRisk(risk: string): 'normal' | 'moderate' | 'critical' {
     case 'MODERATE': return 'moderate';
     default: return 'normal';
   }
-}
-
-function toLowerSeverity(sev: string): 'info' | 'caution' | 'critical' {
-  switch (sev.toUpperCase()) {
-    case 'CRITICAL': return 'critical';
-    case 'CAUTION': return 'caution';
-    default: return 'info';
-  }
-}
-
-function toLowerStatus(status: string): 'unread' | 'acknowledged' | 'resolved' {
-  switch (status.toUpperCase()) {
-    case 'ACKNOWLEDGED': return 'acknowledged';
-    case 'RESOLVED': return 'resolved';
-    default: return 'unread';
-  }
-}
-
-function toLowerType(type: string): 'threshold' | 'ai_pattern' {
-  return type.toUpperCase() === 'AI_PATTERN' ? 'ai_pattern' : 'threshold';
 }
 
 function computeStats(values: number[], unit: string) {
@@ -47,7 +28,7 @@ function computeStats(values: number[], unit: string) {
   };
 }
 
-// Helper to resolve patient by id or userId with authorization
+// Single source of truth authorization check for patient data
 async function resolvePatientWithAuth(patientIdentifier: string, authUser: any) {
   // If 'me', lookup via auth user id
   if (patientIdentifier === 'me') {
@@ -63,6 +44,13 @@ async function resolvePatientWithAuth(patientIdentifier: string, authUser: any) 
         user: true,
         conditions: true,
         doctor: { include: { user: true } },
+        careAssignments: {
+          where: { status: 'ACTIVE' },
+          include: {
+            doctor: { include: { user: true } },
+            clinic: true,
+          },
+        },
         insight: true,
       },
     });
@@ -80,6 +68,13 @@ async function resolvePatientWithAuth(patientIdentifier: string, authUser: any) 
       user: true,
       conditions: true,
       doctor: { include: { user: true } },
+      careAssignments: {
+        where: { status: 'ACTIVE' },
+        include: {
+          doctor: { include: { user: true } },
+          clinic: true,
+        },
+      },
       insight: true,
     },
   });
@@ -89,7 +84,7 @@ async function resolvePatientWithAuth(patientIdentifier: string, authUser: any) 
   // Authorization check:
   // Allowed if:
   // 1. User is the patient
-  // 2. User is a doctor assigned to this patient
+  // 2. User is a doctor with an ACTIVE CareAssignment with this patient
   const isOwnPatient =
     authUser.sub === patient.userId ||
     authUser.dbUserId === patient.userId ||
@@ -98,7 +93,6 @@ async function resolvePatientWithAuth(patientIdentifier: string, authUser: any) 
   if (isOwnPatient) return patient;
 
   if (authUser.role === 'DOCTOR') {
-    // Check if doctor matches
     const doctor = await prisma.doctor.findFirst({
       where: {
         OR: [
@@ -108,8 +102,13 @@ async function resolvePatientWithAuth(patientIdentifier: string, authUser: any) 
         ],
       },
     });
-    if (doctor && patient.doctorId === doctor.id) {
-      return patient;
+
+    if (doctor) {
+      // SINGLE ACCESS RULE GUARD: Active CareAssignment required
+      const authorized = await hasActiveCareAssignment(doctor.id, patient.id);
+      if (authorized) {
+        return patient;
+      }
     }
   }
 
@@ -134,15 +133,34 @@ router.get('/:id/profile', requireAuth, async (req, res, next) => {
     const birthDate = patient.dateOfBirth ? new Date(patient.dateOfBirth) : new Date('1970-01-01');
     const age = Math.abs(new Date(Date.now() - birthDate.getTime()).getUTCFullYear() - 1970);
 
-    const docUser = patient.doctor?.user;
-    const docObj = {
-      id: patient.doctor?.id ?? 'doc_001',
-      name: docUser?.name ?? 'Dr. Elena Ruiz',
-      clinicName: patient.doctor?.clinicName ?? 'Meridian Family Health',
-      phone: patient.doctor?.phone ?? undefined,
-      email: docUser?.email ?? 'doctor@healthlens.demo',
-      assignedDate: patient.doctorAssignedAt?.toISOString(),
-    };
+    const activeAssignments = patient.careAssignments || [];
+    const primaryAssignment = activeAssignments[0];
+
+    const docObj = primaryAssignment
+      ? {
+          id: primaryAssignment.doctor.id,
+          name: primaryAssignment.doctor.user.name,
+          clinicName: primaryAssignment.clinic?.name ?? 'HealthLens Clinic',
+          phone: primaryAssignment.doctor.phone ?? undefined,
+          email: primaryAssignment.doctor.user.email,
+          specialty: primaryAssignment.specialty,
+          assignedDate: primaryAssignment.assignedAt.toISOString(),
+        }
+      : patient.doctor
+      ? {
+          id: patient.doctor.id,
+          name: patient.doctor.user.name,
+          clinicName: patient.doctor.clinicName ?? 'HealthLens Clinic',
+          phone: patient.doctor.phone ?? undefined,
+          email: patient.doctor.user.email,
+          assignedDate: patient.doctorAssignedAt?.toISOString(),
+        }
+      : {
+          id: 'unassigned',
+          name: 'No assigned physician',
+          clinicName: 'HealthLens Network',
+          email: '',
+        };
 
     res.json({
       id: patient.id,
@@ -154,6 +172,15 @@ router.get('/:id/profile', requireAuth, async (req, res, next) => {
       email: patient.user.email,
       conditions: patient.conditions.map((c) => ({ id: c.id, label: c.label })),
       doctor: docObj,
+      careTeam: activeAssignments.map((ca: any) => ({
+        assignmentId: ca.id,
+        doctorId: ca.doctorId,
+        doctorName: ca.doctor.user.name,
+        specialty: ca.specialty,
+        clinicName: ca.clinic?.name ?? 'HealthLens Clinic',
+        clinicPhone: ca.clinic?.phone,
+        assignedAt: ca.assignedAt.toISOString(),
+      })),
     });
   } catch (err) {
     next(err);
@@ -194,11 +221,16 @@ router.patch('/:id/profile', requireAuth, async (req, res, next) => {
         user: true,
         conditions: true,
         doctor: { include: { user: true } },
+        careAssignments: {
+          where: { status: 'ACTIVE' },
+          include: { doctor: { include: { user: true } }, clinic: true },
+        },
       },
     });
 
     const birthDate = updated.dateOfBirth ? new Date(updated.dateOfBirth) : new Date('1970-01-01');
     const age = Math.abs(new Date(Date.now() - birthDate.getTime()).getUTCFullYear() - 1970);
+    const primaryAssignment = updated.careAssignments?.[0];
 
     res.json({
       id: updated.id,
@@ -210,10 +242,10 @@ router.patch('/:id/profile', requireAuth, async (req, res, next) => {
       email: updated.user.email,
       conditions: updated.conditions.map((c) => ({ id: c.id, label: c.label })),
       doctor: {
-        id: updated.doctor?.id ?? 'doc_001',
-        name: updated.doctor?.user?.name ?? 'Dr. Elena Ruiz',
-        clinicName: updated.doctor?.clinicName ?? 'Meridian Family Health',
-        email: updated.doctor?.user?.email ?? 'doctor@healthlens.demo',
+        id: primaryAssignment?.doctor.id ?? updated.doctor?.id ?? 'unassigned',
+        name: primaryAssignment?.doctor.user.name ?? updated.doctor?.user?.name ?? 'Assigned Doctor',
+        clinicName: primaryAssignment?.clinic?.name ?? updated.doctor?.clinicName ?? 'HealthLens Clinic',
+        email: primaryAssignment?.doctor.user.email ?? updated.doctor?.user?.email ?? '',
       },
     });
   } catch (err) {
@@ -247,7 +279,7 @@ router.get('/:id/dashboard', requireAuth, async (req, res, next) => {
     const latest = vitals[0] ?? null;
     const priorWeek = vitals.slice(1, 8);
 
-    const avg = (key: 'systolic' | 'glucose' | 'weightKg' | 'sleepHours') => {
+    const avg = (key: 'systolic' | 'glucose' | 'weightKg' | 'sleepHours' | 'heartRate') => {
       const valid = priorWeek.filter((v) => v[key] != null);
       if (valid.length === 0) return 0;
       return valid.reduce((sum, v) => sum + (Number(v[key]) || 0), 0) / valid.length;
@@ -272,17 +304,24 @@ router.get('/:id/dashboard', requireAuth, async (req, res, next) => {
         systolic: v.systolic ?? 120,
         diastolic: v.diastolic ?? 80,
         glucose: v.glucose ?? 100,
+        heartRate: v.heartRate ?? 72,
       }));
+
+    const primaryAssignment = patient.careAssignments?.[0];
 
     res.json({
       patientName: patient.user.name,
-      // doctor: {
-      //   id: patient.doctor?.id ?? 'doc_001',
-      //   name: patient.doctor?.user?.name ?? 'Dr. Elena Ruiz',
-      //   clinicName: patient.doctor?.clinicName ?? 'Meridian Family Health',
-      //   email: patient.doctor?.user?.email ?? 'doctor@healthlens.demo',
-      // }, 
-      doctor: patient.doctor
+      doctor: primaryAssignment
+        ? {
+            id: primaryAssignment.doctor.id,
+            name: primaryAssignment.doctor.user.name,
+            clinicName: primaryAssignment.clinic?.name ?? 'HealthLens Clinic',
+            phone: primaryAssignment.doctor.phone ?? undefined,
+            email: primaryAssignment.doctor.user.email,
+            specialty: primaryAssignment.specialty,
+            assignedDate: primaryAssignment.assignedAt.toISOString(),
+          }
+        : patient.doctor
         ? {
             id: patient.doctor.id,
             name: patient.doctor.user?.name ?? 'Your doctor',
@@ -320,6 +359,12 @@ router.get('/:id/dashboard', requireAuth, async (req, res, next) => {
           unit: 'hrs',
           label: 'Sleep',
         },
+        heartRate: {
+          value: latest?.heartRate ?? 72,
+          changeVsWeekAvg: latest?.heartRate ? Number((latest.heartRate - avg('heartRate')).toFixed(1)) : 0,
+          unit: 'bpm',
+          label: 'Heart rate',
+        },
       },
       aiInsight: patient.insight
         ? {
@@ -327,16 +372,6 @@ router.get('/:id/dashboard', requireAuth, async (req, res, next) => {
             summary: patient.insight.narrative,
           }
         : null,
-      // recentAlerts: alerts.map((a) => ({
-      //   id: a.id,
-      //   patientId: a.patientId,
-      //   type: toLowerType(a.type),
-      //   severity: toLowerSeverity(a.severity),
-      //   status: toLowerStatus(a.status),
-      //   triggerLabel: a.triggerLabel,
-      //   detail: a.detail ?? undefined,
-      //   triggeredAt: a.triggeredAt.toISOString(),
-      // }))
       recentAlerts: alerts.map(req.user!.role === 'DOCTOR' ? alertForDoctor : alertForPatient),
       sparkline,
     });
@@ -346,7 +381,7 @@ router.get('/:id/dashboard', requireAuth, async (req, res, next) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// POST /patients/:id/vitals
+// POST /patients/:id/vitals (Supports Heart Rate!)
 // ─────────────────────────────────────────────────────────────────────────────
 router.post('/:id/vitals', requireAuth, async (req, res, next) => {
   try {
@@ -372,12 +407,13 @@ router.post('/:id/vitals', requireAuth, async (req, res, next) => {
     const vital = await prisma.vital.create({
       data: {
         patientId: patient.id,
-        systolic: body.systolic !== undefined ? Number(body.systolic) : undefined,
-        diastolic: body.diastolic !== undefined ? Number(body.diastolic) : undefined,
-        glucose: body.glucose !== undefined ? Number(body.glucose) : undefined,
+        systolic: body.systolic !== undefined && body.systolic !== null ? Number(body.systolic) : undefined,
+        diastolic: body.diastolic !== undefined && body.diastolic !== null ? Number(body.diastolic) : undefined,
+        glucose: body.glucose !== undefined && body.glucose !== null ? Number(body.glucose) : undefined,
         glucoseContext: gContext,
-        weightKg: body.weightKg !== undefined ? Number(body.weightKg) : undefined,
-        sleepHours: body.sleepHours !== undefined ? Number(body.sleepHours) : undefined,
+        weightKg: body.weightKg !== undefined && body.weightKg !== null ? Number(body.weightKg) : undefined,
+        sleepHours: body.sleepHours !== undefined && body.sleepHours !== null ? Number(body.sleepHours) : undefined,
+        heartRate: body.heartRate !== undefined && body.heartRate !== null ? Number(body.heartRate) : undefined,
         recordedAt,
       },
     });
@@ -404,6 +440,7 @@ router.post('/:id/vitals', requireAuth, async (req, res, next) => {
       glucoseContext: vital.glucoseContext ? vital.glucoseContext.toLowerCase() : undefined,
       weightKg: vital.weightKg ?? undefined,
       sleepHours: vital.sleepHours ?? undefined,
+      heartRate: vital.heartRate ?? undefined,
     });
   } catch (err) {
     next(err);
@@ -411,7 +448,7 @@ router.post('/:id/vitals', requireAuth, async (req, res, next) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// GET /patients/:id/vitals?range=7d|30d|90d&filter=all|bp|glucose|weight|sleep
+// GET /patients/:id/vitals
 // ─────────────────────────────────────────────────────────────────────────────
 router.get('/:id/vitals', requireAuth, async (req, res, next) => {
   try {
@@ -444,6 +481,7 @@ router.get('/:id/vitals', requireAuth, async (req, res, next) => {
       glucose: v.glucose ?? undefined,
       weightKg: v.weightKg ?? undefined,
       sleepHours: v.sleepHours ?? undefined,
+      heartRate: v.heartRate ?? undefined,
     }));
 
     const stats: Record<string, ReturnType<typeof computeStats>> = {
@@ -451,6 +489,7 @@ router.get('/:id/vitals', requireAuth, async (req, res, next) => {
       glucose: computeStats(points.map((p) => p.glucose ?? 0).filter((v) => v > 0), 'mg/dL'),
       weight: computeStats(points.map((p) => p.weightKg ?? 0).filter((v) => v > 0), 'kg'),
       sleep: computeStats(points.map((p) => p.sleepHours ?? 0).filter((v) => v > 0), 'hrs'),
+      heartRate: computeStats(points.map((p) => p.heartRate ?? 0).filter((v) => v > 0), 'bpm'),
     };
 
     res.json({ points, stats });
@@ -460,7 +499,7 @@ router.get('/:id/vitals', requireAuth, async (req, res, next) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// GET /patients/:id/vitals/log?page=1&pageSize=20
+// GET /patients/:id/vitals/log
 // ─────────────────────────────────────────────────────────────────────────────
 router.get('/:id/vitals/log', requireAuth, async (req, res, next) => {
   try {
@@ -498,6 +537,7 @@ router.get('/:id/vitals/log', requireAuth, async (req, res, next) => {
         glucoseContext: e.glucoseContext ? e.glucoseContext.toLowerCase() : undefined,
         weightKg: e.weightKg ?? undefined,
         sleepHours: e.sleepHours ?? undefined,
+        heartRate: e.heartRate ?? undefined,
       })),
       total,
     });
@@ -562,19 +602,6 @@ router.get('/:id/alerts/history', requireAuth, async (req, res, next) => {
       orderBy: { triggeredAt: 'desc' },
     });
 
-    // res.json(
-    //   alerts.map((a) => ({
-    //     id: a.id,
-    //     patientId: a.patientId,
-    //     type: toLowerType(a.type),
-    //     severity: toLowerSeverity(a.severity),
-    //     status: toLowerStatus(a.status),
-    //     triggerLabel: a.triggerLabel,
-    //     detail: a.detail ?? undefined,
-    //     triggeredAt: a.triggeredAt.toISOString(),
-    //     clinicalNote: a.clinicalNote ?? undefined,
-    //   }))
-    // );
     const serialize = req.user!.role === 'DOCTOR' ? alertForDoctor : alertForPatient;
     res.json(alerts.map(serialize));
   } catch (err) {

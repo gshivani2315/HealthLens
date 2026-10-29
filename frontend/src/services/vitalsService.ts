@@ -1,10 +1,4 @@
-// Backend contract:
-//   GET  /patients/:id/dashboard              -> DashboardSnapshot
-//   GET  /patients/:id/vitals?range=7d|30d|90d&filter=all|bp|glucose|weight|sleep
-//                                              -> { points: TrendPoint[], stats: Record<string, TrendSummaryStats> }
-//   POST /patients/:id/vitals                 { VitalsSubmission } -> VitalsEntry
-//   GET  /patients/:id/vitals/log?page=&pageSize=  -> { entries: VitalsEntry[], total: number }
-
+// frontend/src/services/vitalsService.ts
 import { apiClient, mockDelay, USE_MOCKS } from "./apiClient";
 import { DashboardSnapshot, TrendPoint, TrendRange, TrendSummaryStats, VitalFilter, VitalsEntry, VitalsSubmission } from "@/types";
 import { generateVitalsHistory, mockDoctor, mockPatientProfile } from "./mockData";
@@ -21,6 +15,7 @@ function toTrendPoints(entries: VitalsEntry[]): TrendPoint[] {
     glucose: e.glucose,
     weightKg: e.weightKg,
     sleepHours: e.sleepHours,
+    heartRate: e.heartRate,
   }));
 }
 
@@ -75,11 +70,17 @@ export const vitalsService = {
             unit: "hrs",
             label: "Sleep",
           },
+          heartRate: {
+            value: latest.heartRate ?? 72,
+            changeVsWeekAvg: Number(((latest.heartRate ?? 72) - avg("heartRate")).toFixed(1)),
+            unit: "bpm",
+            label: "Heart rate",
+          },
         },
         aiInsight: {
           generatedAt: latest.recordedAt,
           summary:
-            "Your BP has remained slightly elevated this week, averaging 148/94. Sleep improved by about 1 hour compared to last week — that's a good sign for the days ahead.",
+            "Your BP has remained slightly elevated this week, averaging 148/94. Resting heart rate is stable at 72 bpm. Sleep improved by about 1 hour compared to last week.",
         },
         recentAlerts: [],
         sparkline: history.slice(-7).map((e) => ({
@@ -87,6 +88,7 @@ export const vitalsService = {
           systolic: e.systolic!,
           diastolic: e.diastolic!,
           glucose: e.glucose!,
+          heartRate: e.heartRate ?? 72,
         })),
       });
     }
@@ -116,10 +118,11 @@ export const vitalsService = {
       const history = generateVitalsHistory(patientId, rangeDays(range));
       const points = toTrendPoints(history);
       const stats: Partial<Record<VitalFilter, TrendSummaryStats>> = {
-        bp: computeStats(points.map((p) => p.systolic ?? 0), "mmHg"),
-        glucose: computeStats(points.map((p) => p.glucose ?? 0), "mg/dL"),
-        weight: computeStats(points.map((p) => p.weightKg ?? 0), "kg"),
-        sleep: computeStats(points.map((p) => p.sleepHours ?? 0), "hrs"),
+        bp: computeStats(points.map((p) => p.systolic ?? 0).filter((v) => v > 0), "mmHg"),
+        glucose: computeStats(points.map((p) => p.glucose ?? 0).filter((v) => v > 0), "mg/dL"),
+        weight: computeStats(points.map((p) => p.weightKg ?? 0).filter((v) => v > 0), "kg"),
+        sleep: computeStats(points.map((p) => p.sleepHours ?? 0).filter((v) => v > 0), "hrs"),
+        heartRate: computeStats(points.map((p) => p.heartRate ?? 0).filter((v) => v > 0), "bpm"),
       };
       return mockDelay({ points, stats });
     }

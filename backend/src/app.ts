@@ -4,6 +4,9 @@ import authRoutes from './modules/auth/auth.routes';
 import patientRoutes from './modules/patients/patients.routes';
 import doctorRoutes from './modules/doctor/doctor.routes';
 import alertRoutes from './modules/alerts/alerts.routes';
+import notificationRoutes from './modules/notifications/notification.routes';
+import chatRoutes from './modules/chat/chat.routes';
+import inviteRoutes from './modules/invites/invite.routes';
 import { errorHandler } from './middleware/errorHandler';
 
 export function createApp() {
@@ -36,12 +39,20 @@ export function createApp() {
   app.use('/api/patients', patientRoutes);
   app.use('/api/doctor', doctorRoutes);
   app.use('/api/alerts', alertRoutes);
+  app.use('/api/notifications', notificationRoutes);
+  app.use('/api/chat', chatRoutes);
+  app.use('/api/invites', inviteRoutes);
+  app.use('/api/care-invites', inviteRoutes);
 
   // Direct root route fallbacks in case frontend calls without /api prefix
   app.use('/auth', authRoutes);
   app.use('/patients', patientRoutes);
   app.use('/doctor', doctorRoutes);
   app.use('/alerts', alertRoutes);
+  app.use('/notifications', notificationRoutes);
+  app.use('/chat', chatRoutes);
+  app.use('/invites', inviteRoutes);
+  app.use('/care-invites', inviteRoutes);
 
   app.use((_req, res) => {
     res.status(404).json({ message: 'Route not found' });

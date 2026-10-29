@@ -83,5 +83,28 @@ export function evaluateThresholds(vital: Vital, t: ThresholdValues, weights: We
     }
   }
 
+  // Heart rate (beats per minute)
+  if (vital.heartRate != null) {
+    const hr = vital.heartRate;
+    const maxHr = t.heartRateMax ?? 120;
+    const minHr = t.heartRateMin ?? 50;
+
+    if (hr > maxHr) {
+      hits.push({
+        rule: "HEART_RATE_HIGH",
+        severity: AlertSeverity.CRITICAL,
+        triggerLabel: `Threshold: Heart Rate > ${maxHr} bpm`,
+        detail: `Heart rate of ${hr} bpm exceeds the configured maximum limit of ${maxHr} bpm.`,
+      });
+    } else if (hr < minHr) {
+      hits.push({
+        rule: "HEART_RATE_LOW",
+        severity: AlertSeverity.CRITICAL,
+        triggerLabel: `Threshold: Heart Rate < ${minHr} bpm`,
+        detail: `Heart rate of ${hr} bpm is below the configured minimum limit of ${minHr} bpm.`,
+      });
+    }
+  }
+
   return hits;
 }

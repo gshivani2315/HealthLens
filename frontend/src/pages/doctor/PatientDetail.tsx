@@ -18,7 +18,6 @@ const ranges: { value: TrendRange; label: string }[] = [
   { value: "90d", label: "90D" },
 ];
 
-// Readings are partial (a submission may have only BP, or only glucose), so show a dash, not "undefined".
 const show = (n?: number | null) => (n === undefined || n === null ? "—" : n);
 
 export default function PatientDetail() {
@@ -34,6 +33,7 @@ export default function PatientDetail() {
   const [isEditOpen, setIsEditOpen] = useState(false);
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isGeneratingSummary, setIsGeneratingSummary] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
   // Edit form state
@@ -97,20 +97,12 @@ export default function PatientDetail() {
 
     setIsSubmitting(true);
     try {
-      const updatedProfile = await patientsService.updatePatient(id, updates);
-      setDetail((prev) =>
-        prev
-          ? {
-              ...prev,
-              profile: updatedProfile,
-              riskStatus: editRiskStatus,
-            }
-          : prev
-      );
-      showToast("Patient profile updated successfully.", "success");
+      await patientsService.updatePatient(id, updates);
+      showToast("Patient profile updated successfully", "success");
       setIsEditOpen(false);
+      loadDetail();
     } catch (err) {
-      setFormError(err instanceof Error ? err.message : "Failed to update profile");
+      setFormError(err instanceof Error ? err.message : "Failed to update patient");
     } finally {
       setIsSubmitting(false);
     }
@@ -121,12 +113,27 @@ export default function PatientDetail() {
     setIsSubmitting(true);
     try {
       await patientsService.deletePatient(id);
-      showToast(`Patient removed from care roster.`, "info");
+      showToast("Care assignment ended. Patient removed from your active roster.", "success");
+      setIsDeleteOpen(false);
       navigate("/doctor/dashboard");
     } catch (err) {
       showToast(err instanceof Error ? err.message : "Failed to remove patient", "error");
     } finally {
       setIsSubmitting(false);
+    }
+  }
+
+  async function handleGenerateSummary() {
+    if (!id) return;
+    setIsGeneratingSummary(true);
+    try {
+      await patientsService.generateWeeklySummary(id);
+      showToast("Weekly clinical summary generated successfully", "success");
+      loadDetail();
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Failed to generate summary", "error");
+    } finally {
+      setIsGeneratingSummary(false);
     }
   }
 
@@ -140,70 +147,67 @@ export default function PatientDetail() {
 
   const { profile, riskStatus, aiClinicalInsight, alertHistory, vitalsLog } = detail;
 
-  // Filter by actual date range (the old slice(0, days) took N *rows*, which with two
-  // submissions a day covered only half the selected range).
-  const days = range === "7d" ? 7 : range === "30d" ? 30 : 90;
-  const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
-  const points = vitalsLog
-    .filter((v) => new Date(v.recordedAt).getTime() >= cutoff)
-    .sort((a, b) => new Date(a.recordedAt).getTime() - new Date(b.recordedAt).getTime())
-    .map((v) => ({
-      date: v.recordedAt,
-      systolic: v.systolic,
-      diastolic: v.diastolic,
-      glucose: v.glucose,
-      weightKg: v.weightKg,
-      sleepHours: v.sleepHours,
-    }));
+  const points = vitalsLog.map((v) => ({
+    date: v.recordedAt,
+    systolic: v.systolic,
+    diastolic: v.diastolic,
+    glucose: v.glucose,
+    weightKg: v.weightKg,
+    sleepHours: v.sleepHours,
+    heartRate: v.heartRate,
+  }));
 
   return (
-    <div className="mx-auto max-w-6xl space-y-6">
+    <div className="page-enter mx-auto max-w-[1500px] space-y-6">
       {/* Patient Header Card */}
-      <Card className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex items-center gap-4">
-          <div className="flex h-14 w-14 items-center justify-center rounded-full bg-ink-100 text-lg font-semibold text-ink-600">
-            {profile.name
-              .split(" ")
-              .map((p) => p[0])
-              .slice(0, 2)
-              .join("")}
-          </div>
-          <div>
-            <div className="flex items-center gap-2.5">
-              <h1 className="font-display text-xl font-semibold text-ink">{profile.name}</h1>
-              <Badge tone={riskStatus}>{riskStatus}</Badge>
-            </div>
-            <p className="mt-0.5 text-sm text-ink-400">
-              {profile.age} yrs · {profile.gender} · {profile.conditions.map((c) => c.label).join(", ")}
-            </p>
-            {profile.doctor?.name && (
-              <p className="text-xs text-ink-400">
-                Assigned Physician: <span className="font-medium text-ink-600">{profile.doctor.name}</span>
-                {profile.doctor.clinicName && ` (${profile.doctor.clinicName})`}
-              </p>
+      <Card className="flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <div className="flex items-center gap-3">
+            <h1 className="font-sans text-2xl font-bold tracking-tight text-ink">{profile.name}</h1>
+            <Badge tone={riskStatus}>{riskStatus}</Badge>
+            {profile.specialty && (
+              <span className="rounded-md bg-teal-50 px-2 py-0.5 text-xs font-semibold text-teal-700 border border-teal-200">
+                {profile.specialty}
+              </span>
+            )}
+            {profile.clinic?.name && (
+              <span className="rounded-md bg-ink-50 px-2 py-0.5 text-xs text-ink-600 border border-line">
+                {profile.clinic.name}
+              </span>
             )}
           </div>
+          <p className="mt-1 text-xs text-ink-500">
+            {profile.gender} • {profile.age} years old • Conditions:{" "}
+            {profile.conditions.map((c) => c.label).join(", ")}
+          </p>
         </div>
+
         <div className="flex flex-wrap items-center gap-2">
+          <Link
+            to="/doctor/chat"
+            className="rounded-lg border border-line bg-white px-3 py-2 text-xs font-semibold text-ink shadow-sm hover:bg-ink-50"
+          >
+            Chat Thread
+          </Link>
           <button
             type="button"
             onClick={openEditModal}
-            className="rounded-lg border border-line bg-white px-3 py-2 text-xs font-semibold text-ink-600 shadow-sm hover:border-ink-400 hover:text-ink"
+            className="rounded-lg border border-line bg-white px-3 py-2 text-xs font-semibold text-ink shadow-sm hover:bg-ink-50"
           >
             Edit Profile
           </button>
           <Link
             to={`/doctor/patients/${profile.id}/thresholds`}
-            className="rounded-lg border border-line bg-white px-3 py-2 text-xs font-semibold text-ink-600 shadow-sm hover:border-ink-400 hover:text-ink"
+            className="rounded-lg border border-line bg-white px-3 py-2 text-xs font-semibold text-ink shadow-sm hover:bg-ink-50"
           >
-            Adjust thresholds
+            Alert Thresholds
           </Link>
           <button
             type="button"
             onClick={() => setIsDeleteOpen(true)}
             className="rounded-lg border border-line bg-white px-3 py-2 text-xs font-semibold text-brick-600 shadow-sm hover:border-brick-300 hover:bg-brick-50"
           >
-            Remove Patient
+            End Care Assignment
           </button>
         </div>
       </Card>
@@ -237,20 +241,45 @@ export default function PatientDetail() {
             </div>
           </Card>
 
-          {aiClinicalInsight ? (
-            <Card className="border-teal-100 bg-teal-50/40">
-              <p className="text-xs font-medium uppercase tracking-wide text-teal-600">Gemini trend analysis</p>
-              <p className="mt-2 text-[15px] leading-relaxed text-ink">{aiClinicalInsight.narrative}</p>
-              <p className="mt-2 text-xs text-ink-400">Generated {timeAgo(aiClinicalInsight.generatedAt)}</p>
-            </Card>
-          ) : (
+          {/* Clinical Team / Multi-Doctor Panel */}
+          {profile.careTeam && profile.careTeam.length > 0 && (
             <Card>
-              <p className="text-xs font-medium uppercase tracking-wide text-ink-400">Gemini trend analysis</p>
-              <p className="mt-2 text-sm text-ink-400">
-                No AI assessment yet. It appears once enough readings have been logged.
-              </p>
+              <CardHeader title="Care Team (Active Doctors)" />
+              <div className="space-y-2 mt-2">
+                {profile.careTeam.map((m: any) => (
+                  <div key={m.assignmentId} className="rounded-lg border border-line/70 p-2.5 text-xs bg-ink-50/50">
+                    <p className="font-semibold text-ink">{m.doctorName}</p>
+                    <p className="text-ink-500 mt-0.5">{m.specialty} • {m.clinicName}</p>
+                  </div>
+                ))}
+              </div>
             </Card>
           )}
+
+          {/* Gemini AI Clinical Assessment & Manual Trigger */}
+          <Card className="border-teal-100 bg-teal-50/40">
+            <div className="flex items-center justify-between">
+              <p className="text-xs font-medium uppercase tracking-wide text-teal-700">Gemini Trend Analysis</p>
+              <button
+                type="button"
+                onClick={handleGenerateSummary}
+                disabled={isGeneratingSummary}
+                className="text-[11px] font-semibold text-teal-700 hover:text-teal-900 bg-white/70 px-2 py-1 rounded border border-teal-200"
+              >
+                {isGeneratingSummary ? "Generating..." : "⚡ Run AI Summary"}
+              </button>
+            </div>
+            {aiClinicalInsight ? (
+              <>
+                <p className="mt-2 text-[15px] leading-relaxed text-ink">{aiClinicalInsight.narrative}</p>
+                <p className="mt-2 text-xs text-ink-400">Generated {timeAgo(aiClinicalInsight.generatedAt)}</p>
+              </>
+            ) : (
+              <p className="mt-2 text-sm text-ink-400">
+                No AI assessment yet. Click "Run AI Summary" or await the scheduled run.
+              </p>
+            )}
+          </Card>
 
           <Card>
             <div className="flex items-start justify-between">
@@ -321,6 +350,7 @@ export default function PatientDetail() {
             <GlucoseChart data={points} />
           </Card>
 
+          {/* Doctor Vitals Log with Heart Rate */}
           <Card padded={false}>
             <div className="border-b border-line p-4">
               <h3 className="font-display text-base font-semibold text-ink">Raw vitals log</h3>
@@ -331,6 +361,7 @@ export default function PatientDetail() {
                   <tr className="border-b border-line text-xs uppercase tracking-wide text-ink-400">
                     <th className="px-4 py-2 font-medium">Timestamp</th>
                     <th className="px-4 py-2 font-medium">BP</th>
+                    <th className="px-4 py-2 font-medium">Heart Rate</th>
                     <th className="px-4 py-2 font-medium">Glucose</th>
                     <th className="px-4 py-2 font-medium">Weight</th>
                     <th className="px-4 py-2 font-medium">Sleep</th>
@@ -338,10 +369,13 @@ export default function PatientDetail() {
                 </thead>
                 <tbody>
                   {vitalsLog.map((v) => (
-                    <tr key={v.id} className="border-b border-line last:border-0">
+                    <tr key={v.id} className="border-b border-line last:border-0 hover:bg-ink-50/50">
                       <td className="px-4 py-2 text-ink-500">{formatDateTime(v.recordedAt)}</td>
                       <td className="px-4 py-2 font-mono tabular text-ink">
                         {v.systolic != null && v.diastolic != null ? `${v.systolic}/${v.diastolic}` : "—"}
+                      </td>
+                      <td className="px-4 py-2 font-mono tabular text-ink">
+                        {v.heartRate != null ? `${v.heartRate} bpm` : "—"}
                       </td>
                       <td className="px-4 py-2 font-mono tabular text-ink">{show(v.glucose)}</td>
                       <td className="px-4 py-2 font-mono tabular text-ink">{show(v.weightKg)}</td>
@@ -452,21 +486,23 @@ export default function PatientDetail() {
         </form>
       </Modal>
 
-      {/* DELETE MODAL */}
-      <Modal open={isDeleteOpen} onClose={() => setIsDeleteOpen(false)} title="Remove Patient from Care">
+      {/* END CARE ASSIGNMENT MODAL */}
+      <Modal open={isDeleteOpen} onClose={() => setIsDeleteOpen(false)} title="End Care Assignment">
         <div className="space-y-4">
           <p className="text-sm text-ink">
-            Are you sure you want to remove <span className="font-semibold text-ink">{profile.name}</span> from your care roster?
+            Are you sure you want to end your active care assignment for{" "}
+            <span className="font-semibold text-ink">{profile.name}</span>?
           </p>
           <p className="text-xs text-ink-400">
-            This will unassign the patient from your clinical supervision and remove them from active monitoring.
+            This ends your clinical supervision and locks messaging for this assignment. The patient’s account,
+            historical telemetry data, and assignments with other doctors remain intact.
           </p>
           <div className="flex justify-end gap-2 pt-3">
             <Button variant="secondary" onClick={() => setIsDeleteOpen(false)}>
               Cancel
             </Button>
             <Button variant="danger" isLoading={isSubmitting} onClick={handleDeleteSubmit}>
-              Remove Patient
+              End Assignment
             </Button>
           </div>
         </div>

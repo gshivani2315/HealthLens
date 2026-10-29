@@ -5,7 +5,6 @@ import { vitalsService } from "@/services/vitalsService";
 import { insightsService } from "@/services/insightsService";
 import { DashboardSnapshot, AlertItem } from "@/types";
 import Spinner from "@/components/ui/Spinner";
-import Badge from "@/components/ui/Badge";
 import TrendSparkline from "@/components/charts/TrendSparkline";
 import { timeAgo } from "@/lib/utils";
 
@@ -40,7 +39,14 @@ export default function PatientDashboard() {
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="font-sans text-3xl font-bold tracking-tight text-ink">Dashboard</h1>
-          <p className="mt-1 text-sm text-ink-500">Welcome back, {user?.name?.split(" ")[0]}</p>
+          <p className="mt-1 text-sm text-ink-500">
+            Welcome back, {user?.name?.split(" ")[0]}
+            {snapshot.doctor && (
+              <span className="ml-2 text-xs text-teal-700 bg-teal-50 px-2 py-0.5 rounded-md border border-teal-200">
+                Supervising: {snapshot.doctor.name} ({snapshot.doctor.clinicName})
+              </span>
+            )}
+          </p>
         </div>
         <div className="flex items-center gap-2 rounded-full border border-line bg-[#edf5ef] px-3 py-2 text-xs font-semibold text-[#214c3b]">
           <span className={`h-2 w-2 rounded-full ${snapshot.vitalsLoggedToday ? "bg-[#397d52]" : "bg-amber-500"}`} />
@@ -93,6 +99,7 @@ export default function PatientDashboard() {
           </div>
         </section>
 
+        {/* Vitals Overview with Heart Rate Tile */}
         <section className="rounded-2xl border border-[#b5d0bf] bg-gradient-to-br from-[#c9dfd1] to-[#a9c8b7] p-5 xl:col-span-4">
           <h2 className="text-lg font-semibold text-ink">Vitals Overview</h2>
           <p className="mt-1 text-xs text-ink-500">Your latest recorded measurements</p>
@@ -101,10 +108,17 @@ export default function PatientDashboard() {
               { label: "Blood glucose", value: metrics.glucose.value, unit: metrics.glucose.unit, icon: "◉" },
               { label: "Weight", value: metrics.weight.value, unit: metrics.weight.unit, icon: "↕" },
               { label: "Sleep", value: metrics.sleep.value, unit: metrics.sleep.unit, icon: "☾" },
-              { label: "Blood pressure", value: `${metrics.bloodPressure.systolic}/${metrics.bloodPressure.diastolic}`, unit: "mmHg", icon: "⌁" },
+              { label: "Heart rate", value: metrics.heartRate?.value ?? 72, unit: "bpm", icon: "♥" },
+              { label: "Blood pressure", value: `${metrics.bloodPressure.systolic}/${metrics.bloodPressure.diastolic}`, unit: "mmHg", icon: "⌁", span: "col-span-2" },
             ].map((item) => (
-              <div key={item.label} className="rounded-xl border border-white/50 bg-white/55 p-3 transition-transform duration-200 hover:-translate-y-0.5">
-                <div className="flex items-center justify-between gap-2 text-xs text-ink-600"><span>{item.label}</span><span className="text-base text-[#214c3b]">{item.icon}</span></div>
+              <div
+                key={item.label}
+                className={`rounded-xl border border-white/50 bg-white/55 p-3 transition-transform duration-200 hover:-translate-y-0.5 ${item.span || ""}`}
+              >
+                <div className="flex items-center justify-between gap-2 text-xs text-ink-600">
+                  <span>{item.label}</span>
+                  <span className="text-base text-[#214c3b]">{item.icon}</span>
+                </div>
                 <p className="mt-2 font-mono text-2xl font-semibold tracking-tight text-ink">{item.value}</p>
                 <p className="text-xs text-ink-500">{item.unit}</p>
               </div>
@@ -133,10 +147,10 @@ export default function PatientDashboard() {
           <ul className="mt-4 space-y-3">
             {alerts.slice(0, 3).map((a) => (
               <li key={a.id} className="flex items-start gap-3 border-b border-[#c5d9cc] pb-3 last:border-0 last:pb-0">
-                <Badge tone={a.severity}>{a.severity}</Badge>
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium text-ink">{a.triggerLabel}</p>
-                  <p className="mt-1 text-xs text-ink-500">{timeAgo(a.triggeredAt)}</p>
+                <span className="mt-1 h-2 w-2 shrink-0 rounded-full bg-amber-500" />
+                <div className="flex-1">
+                  <p className="text-sm font-semibold text-ink">{a.triggerLabel}</p>
+                  <p className="text-xs text-ink-500">{timeAgo(a.triggeredAt)}</p>
                 </div>
               </li>
             ))}

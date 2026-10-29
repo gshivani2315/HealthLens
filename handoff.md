@@ -332,11 +332,53 @@ erDiagram
         DateTime createdAt
         DateTime updatedAt
     }
+    Clinic {
+        String id PK
+        String name
+        String phone
+        String address
+        DateTime createdAt
+        DateTime updatedAt
+    }
+    ClinicMember {
+        String id PK
+        String doctorId FK
+        String clinicId FK
+        String role
+        DateTime createdAt
+        DateTime updatedAt
+    }
     Doctor {
         String id PK
         String userId FK
         String clinicName
         String phone
+        DateTime createdAt
+        DateTime updatedAt
+    }
+    CareAssignment {
+        String id PK
+        String patientId FK
+        String doctorId FK
+        String clinicId FK
+        String specialty
+        AssignmentStatus status
+        DateTime assignedAt
+        DateTime endedAt
+        DateTime createdAt
+        DateTime updatedAt
+    }
+    CareInvite {
+        String id PK
+        String code UK
+        String doctorId FK
+        String clinicId FK
+        String specialty
+        String patientEmail
+        InviteStatus status
+        DateTime expiresAt
+        DateTime createdAt
+        DateTime updatedAt
     }
     Patient {
         String id PK
@@ -348,11 +390,14 @@ erDiagram
         String phone
         RiskStatus riskStatus
         DateTime lastReadingAt
+        DateTime createdAt
+        DateTime updatedAt
     }
     ChronicCondition {
         String id PK
         String patientId FK
         String label
+        DateTime createdAt
     }
     Vital {
         String id PK
@@ -365,6 +410,7 @@ erDiagram
         Float sleepHours
         Int heartRate
         DateTime recordedAt
+        DateTime createdAt
     }
     PatientThreshold {
         String patientId PK_FK
@@ -375,6 +421,9 @@ erDiagram
         Int glucosePostMealMax
         Float weightDeltaKg
         Int weightDeltaDays
+        Int heartRateMax
+        Int heartRateMin
+        DateTime updatedAt
     }
     Alert {
         String id PK
@@ -395,6 +444,31 @@ erDiagram
         DateTime followUpRequestedAt
         String followUpNote
         DateTime triggeredAt
+        DateTime acknowledgedAt
+        DateTime resolvedAt
+        DateTime createdAt
+        DateTime updatedAt
+    }
+    Notification {
+        String id PK
+        String userId FK
+        String title
+        String message
+        NotificationType type
+        Boolean read
+        String link
+        Json metadata
+        DateTime createdAt
+        DateTime updatedAt
+    }
+    Message {
+        String id PK
+        String assignmentId FK
+        String senderId FK
+        String content
+        Boolean read
+        DateTime createdAt
+        DateTime updatedAt
     }
     PatientInsight {
         String patientId PK_FK
@@ -403,6 +477,7 @@ erDiagram
         String trend
         Json stats
         DateTime generatedAt
+        DateTime updatedAt
     }
     WeeklySummary {
         String id PK
@@ -413,11 +488,21 @@ erDiagram
         String[] takeaways
         String trend
         Json stats
+        String model
+        DateTime generatedAt
     }
 
     User ||--o| Doctor : "has"
     User ||--o| Patient : "is"
-    Doctor ||--o{ Patient : "manages"
+    Doctor ||--o{ ClinicMember : "belongs to"
+    Clinic ||--o{ ClinicMember : "has"
+    Doctor ||--o{ CareAssignment : "supervises"
+    Patient ||--o{ CareAssignment : "has"
+    Clinic ||--o{ CareAssignment : "houses"
+    Doctor ||--o{ CareInvite : "issues"
+    CareAssignment ||--o{ Message : "contains"
+    User ||--o{ Notification : "receives"
+    User ||--o{ Message : "sends"
     Patient ||--o{ ChronicCondition : "has"
     Patient ||--o{ Vital : "logs"
     Patient ||--o| PatientThreshold : "has"
@@ -429,38 +514,61 @@ erDiagram
 
 ### Key Design Decisions in Schema
 
-- **`User` is the identity anchor** — both `Doctor` and `Patient` are 1-to-1 extensions. This avoids duplicating email/name.
-- **`Patient.riskStatus`** is maintained by the insight-worker (not computed on read) so the doctor roster query is a cheap indexed scan.
-- **`Alert.dedupeKey`** is unique — makes Kafka redelivery and retry loops fully idempotent.
-- **`PatientInsight`** is a single-row cache (one per patient) — the insight-worker upserts it, so no Redis is needed for cooldown.
+- **Multi-Clinic, Multi-Doctor Care Model (`CareAssignment`)** — A patient can have multiple doctors across specialties (e.g. Cardiology, Endocrinology, Primary Care), and doctors can belong to multiple clinics (`ClinicMember`).
+- **Single Access Rule Guard (`hasActiveCareAssignment`)** — A doctor can access a patient if and only if an ACTIVE `CareAssignment` exists between them. Clinic membership alone grants no patient access.
+- **Shared Alerts and Shared Thresholds** — Alerts are shared across all active doctors caring for the patient. Acknowledging an alert records `acknowledgedById` while marking the shared state. Alert thresholds are unified per patient.
+- **`CareInvite` for Self-Registration** — Patients can self-register (`POST /auth/register-patient`) and link to a doctor via a doctor-issued invite code.
+- **Database-Backed Notifications (`Notification`)** — Powers the in-app notification bell, with email dispatch for critical alerts and visit requests.
+- **Clinical Chat Scoped to Assignments (`Message`)** — Threads are scoped 1-to-1 to each `CareAssignment`. When an assignment ends (`ENDED`), the thread is locked to enforce privacy and access boundaries.
+- **Full Heart Rate Telemetry** — Stored in `Vital.heartRate`, checked against `PatientThreshold.heartRateMax` and `heartRateMin`, logged in doctor views and dashboard overview tiles.
 - **`PatientThreshold`** has defaults matching clinical guidelines — missing rows in the worker fall back gracefully.
 - **All measurements in `Vital` are nullable** — a patient can log only BP or only glucose in one submission.
 
 ---
 
-## 8. Authentication Flow
+## 8. Authentication & Token Refresh Flow
 
 ```mermaid
 sequenceDiagram
-    participant FE as Frontend
+    participant FE as Frontend (apiClient.ts)
     participant BE as Backend API
     participant SUPA as Supabase Auth
 
+    Note over FE,SUPA: 1. Initial Login
     FE->>BE: POST /auth/login { email, password }
     BE->>SUPA: POST /auth/v1/token?grant_type=password (anon key)
     SUPA-->>BE: { access_token, refresh_token, user }
     BE->>BE: Find/create User row in Prisma DB
     BE-->>FE: { token, refreshToken, user }
-    FE->>FE: localStorage.setItem(token)
+    FE->>FE: Save token + refreshToken to localStorage
 
-    Note over FE,BE: Every protected request
-
-    FE->>BE: GET /any-protected-route (Bearer token)
+    Note over FE,SUPA: 2. Protected API Calls
+    FE->>BE: GET /any-protected-route (Bearer access_token)
     BE->>SUPA: GET /auth/v1/user (Bearer token, anon key)
     SUPA-->>BE: { id, email, app_metadata: { role } }
     BE->>BE: Find User in Prisma DB → req.user
-    BE-->>FE: Response
+    BE-->>FE: 200 OK Response
+
+    Note over FE,SUPA: 3. Silent Token Refresh (on 401 expiration)
+    FE->>BE: GET /patients/:id/vitals (Expired access_token)
+    BE-->>FE: 401 Unauthorized
+    FE->>FE: Intercept 401 in apiClient.ts (single-flight refresh)
+    FE->>BE: POST /auth/refresh { refreshToken }
+    BE->>SUPA: POST /auth/v1/token?grant_type=refresh_token
+    SUPA-->>BE: { access_token, refresh_token }
+    BE-->>FE: { token, refreshToken }
+    FE->>FE: Rotate tokens in localStorage
+    FE->>BE: Retry original GET /patients/:id/vitals (New access_token)
+    BE-->>FE: 200 OK Response
 ```
+
+### Token Refresh Architecture (Wired in `apiClient.ts` & `AuthContext.tsx`)
+- Supabase access tokens expire after approximately 1 hour.
+- `apiClient.ts` intercepts any `401 Unauthorized` response on protected endpoints.
+- It initiates a single-flight `doRefresh()` call to `POST /auth/refresh` using the stored `refreshToken`.
+- If multiple API requests 401 concurrently, they share the same in-flight refresh promise to prevent refresh token reuse errors (since Supabase rotates refresh tokens upon use).
+- On success, the rotated tokens are stored in `localStorage` and failed requests are retried seamlessly without user disruption.
+- If refresh fails (e.g. session revoked), `SESSION_EXPIRED_EVENT` is dispatched, clearing credentials and redirecting to `/login`.
 
 ### Role Encoding
 - `app_metadata.role` in Supabase stores `"DOCTOR"` or `"PATIENT"` (set at creation by the service-role Admin API).

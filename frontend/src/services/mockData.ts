@@ -106,6 +106,7 @@ export function generateVitalsHistory(patientId: string, days = 90): VitalsEntry
       glucoseContext: i % 2 === 0 ? "fasting" : "post_meal",
       weightKg: Number(seededWiggle(seed.base.weight - drift * 1.5, 0.6, i + 8).toFixed(1)),
       sleepHours: Number(seededWiggle(seed.base.sleep + drift * 0.6, 0.8, i + 3).toFixed(1)),
+      heartRate: Math.round(seededWiggle(72, 8, i + 4)),
     });
   }
   return entries;
@@ -131,6 +132,7 @@ export function getRoster(doctorId?: string): PatientRosterRow[] {
       conditions: s.conditions,
       latestBloodPressure: { systolic: latest.systolic!, diastolic: latest.diastolic! },
       latestGlucose: latest.glucose!,
+      latestHeartRate: latest.heartRate ?? 72,
       riskStatus: s.risk,
       lastReadingAt: latest.recordedAt,
     };
@@ -505,6 +507,8 @@ export const mockThresholds: Record<string, ThresholdConfig> = Object.fromEntrie
       glucosePostMealMax: 180,
       weightDeltaKg: 2,
       weightDeltaDays: 7,
+      heartRateMax: 120,
+      heartRateMin: 50,
     },
   ])
 );

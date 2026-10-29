@@ -1,8 +1,8 @@
-// frontend/src/context/AuthContext.tsx   (replaces current)
+// frontend/src/context/AuthContext.tsx
 import { createContext, ReactNode, useContext, useEffect, useMemo, useState } from "react";
 import { authService } from "@/services/authService";
 import { SESSION_EXPIRED_EVENT } from "@/services/apiClient";
-import { AuthResponse, AuthUser, DoctorRegisterPayload, LoginPayload } from "@/types";
+import { AuthResponse, AuthUser, DoctorRegisterPayload, PatientRegisterPayload, LoginPayload } from "@/types";
 import { REFRESH_TOKEN_STORAGE_KEY, TOKEN_STORAGE_KEY, USER_STORAGE_KEY } from "@/lib/constants";
 
 interface AuthContextValue {
@@ -10,6 +10,7 @@ interface AuthContextValue {
   isLoading: boolean;
   login: (payload: LoginPayload) => Promise<AuthUser>;
   registerDoctor: (payload: DoctorRegisterPayload) => Promise<AuthUser>;
+  registerPatient: (payload: PatientRegisterPayload) => Promise<AuthUser>;
   logout: () => void;
 }
 
@@ -19,7 +20,7 @@ function saveSession(res: AuthResponse) {
   localStorage.setItem(TOKEN_STORAGE_KEY, res.token);
   localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(res.user));
   if (res.refreshToken) localStorage.setItem(REFRESH_TOKEN_STORAGE_KEY, res.refreshToken);
-  else localStorage.removeItem(REFRESH_TOKEN_STORAGE_KEY); // mock mode has none
+  else localStorage.removeItem(REFRESH_TOKEN_STORAGE_KEY);
 }
 
 function clearSession() {
@@ -42,12 +43,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         clearSession();
       }
     } else if (stored || token) {
-      clearSession(); // half-present session: treat as logged out
+      clearSession();
     }
     setIsLoading(false);
   }, []);
 
-  // apiClient fires this when a request 401s and the refresh token no longer works.
   useEffect(() => {
     const onExpired = () => setUser(null);
     window.addEventListener(SESSION_EXPIRED_EVENT, onExpired);
@@ -68,13 +68,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return res.user;
   };
 
+  const registerPatient = async (payload: PatientRegisterPayload) => {
+    const res = await authService.registerPatient(payload);
+    saveSession(res);
+    setUser(res.user);
+    return res.user;
+  };
+
   const logout = () => {
-    authService.logout().catch(() => {}); // fire-and-forget; the call needs the token, so do it before clearing
+    authService.logout().catch(() => {});
     clearSession();
     setUser(null);
   };
 
-  const value = useMemo(() => ({ user, isLoading, login, registerDoctor, logout }), [user, isLoading]);
+  const value = useMemo(
+    () => ({ user, isLoading, login, registerDoctor, registerPatient, logout }),
+    [user, isLoading]
+  );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

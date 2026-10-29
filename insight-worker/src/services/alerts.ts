@@ -18,7 +18,77 @@ export interface NewAlert {
 /** Inserts an alert unless one with the same dedupeKey exists. Returns true if a new row was created. */
 export async function createAlertOnce(alert: NewAlert): Promise<boolean> {
   try {
-    await prisma.alert.create({ data: alert });
+    const created = await prisma.alert.create({ data: alert });
+
+    // When an alert is created, notify every active doctor on the patient.
+    // "Alerts go to every active doctor on the patient. The alert status stays shared, and acknowledgedById records who handled it."
+    // "In-app bell backed by the database, plus email for critical alerts"
+    try {
+      const patient = await prisma.patient.findUnique({
+        where: { id: alert.patientId },
+        include: {
+          user: true,
+          careAssignments: {
+            where: { status: 'ACTIVE' },
+            include: { doctor: { include: { user: true } } },
+          },
+        },
+      });
+
+      if (patient) {
+        // Collect all active doctor user IDs
+        const activeDoctorUsers = new Map<string, { userId: string; email: string; name: string }>();
+
+        for (const ca of patient.careAssignments) {
+          if (ca.doctor?.user) {
+            activeDoctorUsers.set(ca.doctor.userId, {
+              userId: ca.doctor.userId,
+              email: ca.doctor.user.email,
+              name: ca.doctor.user.name,
+            });
+          }
+        }
+
+        // Backward compatibility fallback for legacy doctorId
+        if (patient.doctorId && !activeDoctorUsers.has(patient.doctorId)) {
+          const doc = await prisma.doctor.findUnique({
+            where: { id: patient.doctorId },
+            include: { user: true },
+          });
+          if (doc?.user) {
+            activeDoctorUsers.set(doc.userId, {
+              userId: doc.userId,
+              email: doc.user.email,
+              name: doc.user.name,
+            });
+          }
+        }
+
+        const notifType = alert.severity === 'CRITICAL' ? 'CRITICAL_ALERT' : 'SYSTEM';
+
+        for (const docUser of activeDoctorUsers.values()) {
+          await (prisma as any).notification.create({
+            data: {
+              userId: docUser.userId,
+              title: `${alert.severity === 'CRITICAL' ? 'CRITICAL ALERT' : 'Alert'}: ${patient.user.name}`,
+              message: `${alert.triggerLabel}. ${alert.detail || ''}`,
+              type: notifType,
+              link: `/doctor/patients/${patient.id}`,
+              metadata: { alertId: created.id, patientId: patient.id },
+            },
+          }).catch(() => {});
+
+          if (alert.severity === 'CRITICAL' && docUser.email) {
+            console.log(
+              `\n📧 [EMAIL DISPATCHED] To: ${docUser.email} | Subject: [CRITICAL HEALTH ALERT] ${patient.user.name}: ${alert.triggerLabel}\nPatient ${patient.user.name} has triggered a critical alert: ${alert.detail || alert.triggerLabel}.\nPlease review in HealthLens.\n`
+            );
+          }
+        }
+      }
+    } catch (notifErr) {
+      console.warn('[AlertNotification] Notice:', (notifErr as Error)?.message);
+    }
+
     return true;
   } catch (err) {
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") return false; // duplicate
@@ -60,5 +130,7 @@ export async function recomputeRisk(patientId: string): Promise<RiskStatus> {
 
 export async function recomputeAllRisk(): Promise<void> {
   const patients = await prisma.patient.findMany({ select: { id: true } });
-  for (const p of patients) await recomputeRisk(p.id);
+  for (const p of patients) {
+    await recomputeRisk(p.id);
+  }
 }

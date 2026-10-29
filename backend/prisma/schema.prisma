@@ -52,7 +52,28 @@ enum AiRiskLevel {
   HIGH
 }
 
-// ───────────────────────────── People ─────────────────────────────
+enum AssignmentStatus {
+  PENDING
+  ACTIVE
+  ENDED
+}
+
+enum InviteStatus {
+  PENDING
+  ACCEPTED
+  EXPIRED
+  CANCELLED
+}
+
+enum NotificationType {
+  CRITICAL_ALERT
+  VISIT_REQUEST
+  SYSTEM
+  CHAT
+  CARE_ASSIGNMENT
+}
+
+// ───────────────────────────── People & Clinics ─────────────────────────────
 
 model User {
   id        String   @id @default(cuid())
@@ -63,28 +84,104 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  patient Patient?
-  doctor  Doctor?
+  patient       Patient?
+  doctor        Doctor?
+  notifications Notification[]
+  messagesSent  Message[]
+}
+
+model Clinic {
+  id        String   @id @default(cuid())
+  name      String
+  phone     String?
+  address   String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  members     ClinicMember[]
+  assignments CareAssignment[]
+  invites     CareInvite[]
+}
+
+model ClinicMember {
+  id        String   @id @default(cuid())
+  doctorId  String
+  clinicId  String
+  role      String   @default("PHYSICIAN") // e.g. "PHYSICIAN", "SPECIALIST", "STAFF"
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  doctor Doctor @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+  clinic Clinic @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  @@unique([doctorId, clinicId])
+  @@index([clinicId])
+  @@index([doctorId])
 }
 
 model Doctor {
   id         String   @id @default(cuid())
   userId     String   @unique
-  clinicName String?
+  clinicName String?  // Legacy column preserved for backward compatibility
   phone      String?
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
-  user               User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  patients           Patient[]
+  user               User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  patients           Patient[]        // Legacy relation preserved for backward compatibility
   acknowledgedAlerts Alert[]
+  clinicMemberships  ClinicMember[]
+  careAssignments    CareAssignment[]
+  careInvites        CareInvite[]
+}
+
+model CareAssignment {
+  id         String           @id @default(cuid())
+  patientId  String
+  doctorId   String
+  clinicId   String?
+  specialty  String           @default("General Practice")
+  status     AssignmentStatus @default(ACTIVE)
+  assignedAt DateTime         @default(now())
+  endedAt    DateTime?
+  createdAt  DateTime         @default(now())
+  updatedAt  DateTime         @updatedAt
+
+  patient  Patient   @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  doctor   Doctor    @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+  clinic   Clinic?   @relation(fields: [clinicId], references: [id], onDelete: SetNull)
+  messages Message[]
+
+  @@index([doctorId, status])
+  @@index([patientId, status])
+  @@index([clinicId])
+}
+
+model CareInvite {
+  id           String       @id @default(cuid())
+  code         String       @unique
+  doctorId     String
+  clinicId     String?
+  specialty    String?      @default("General Practice")
+  patientEmail String?
+  status       InviteStatus @default(PENDING)
+  expiresAt    DateTime
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  doctor Doctor  @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+  clinic Clinic? @relation(fields: [clinicId], references: [id], onDelete: SetNull)
+
+  @@index([code])
+  @@index([doctorId])
+  @@index([clinicId])
 }
 
 model Patient {
   id               String     @id @default(cuid())
   userId           String     @unique
-  doctorId         String?
-  doctorAssignedAt DateTime?
+  doctorId         String?    // Legacy column preserved for backward compatibility
+  doctorAssignedAt DateTime?  // Legacy column preserved for backward compatibility
   dateOfBirth      DateTime?
   gender           String?
   phone            String?
@@ -96,14 +193,15 @@ model Patient {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  user       User               @relation(fields: [userId], references: [id], onDelete: Cascade)
-  doctor     Doctor?            @relation(fields: [doctorId], references: [id], onDelete: SetNull)
-  conditions ChronicCondition[]
-  vitals     Vital[]
-  alerts     Alert[]
-  summaries  WeeklySummary[]
-  threshold  PatientThreshold?
-  insight    PatientInsight?
+  user            User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  doctor          Doctor?            @relation(fields: [doctorId], references: [id], onDelete: SetNull)
+  careAssignments CareAssignment[]
+  conditions      ChronicCondition[]
+  vitals          Vital[]
+  alerts          Alert[]
+  summaries       WeeklySummary[]
+  threshold       PatientThreshold?
+  insight         PatientInsight?
 
   @@index([doctorId, riskStatus])
   @@index([lastReadingAt])
@@ -121,8 +219,6 @@ model ChronicCondition {
 }
 
 // ───────────────────────────── Telemetry ─────────────────────────────
-// One row per submission (matches the LogVitals form). Every measurement is nullable;
-// see the CHECK constraints in the README steps.
 
 model Vital {
   id             String          @id @default(cuid())
@@ -133,7 +229,7 @@ model Vital {
   glucoseContext GlucoseContext?
   weightKg       Float?
   sleepHours     Float?
-  heartRate      Int?
+  heartRate      Int? // beats per minute (bpm)
   recordedAt     DateTime        @default(now())
   createdAt      DateTime        @default(now())
 
@@ -143,7 +239,6 @@ model Vital {
 }
 
 // ───────────────────────────── Doctor-configured thresholds ─────────────────────────────
-// Worker reads this on every event. Missing row => worker falls back to defaults.
 
 model PatientThreshold {
   patientId          String   @id
@@ -154,6 +249,8 @@ model PatientThreshold {
   glucosePostMealMax Int      @default(180)
   weightDeltaKg      Float    @default(2)
   weightDeltaDays    Int      @default(7)
+  heartRateMax       Int      @default(120)
+  heartRateMin       Int      @default(50)
   updatedAt          DateTime @updatedAt
 
   patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
@@ -162,28 +259,28 @@ model PatientThreshold {
 // ───────────────────────────── Intelligence output ─────────────────────────────
 
 model Alert {
-  id             String        @id @default(cuid())
-  patientId      String
-  type           AlertType
-  severity       AlertSeverity
-  status         AlertStatus   @default(UNREAD)
-  rule           String // machine-readable, e.g. BP_THRESHOLD, GLUCOSE_LOW, AI_PATTERN
-  triggerLabel   String // "Threshold: BP > 160/100"
-  detail         String?
-  aiRationale    String?
-  metrics        Json? // averages, slope, consecutive count, ...
-  vitalId        String? // reading that triggered it (threshold alerts)
-  dedupeKey      String        @unique // makes Kafka redelivery + retries idempotent
-  clinicalNote   String?
-  noteSharedWithPatient Boolean   @default(false)
+  id                    String        @id @default(cuid())
+  patientId             String
+  type                  AlertType
+  severity              AlertSeverity
+  status                AlertStatus   @default(UNREAD)
+  rule                  String // machine-readable, e.g. BP_THRESHOLD, GLUCOSE_LOW, AI_PATTERN
+  triggerLabel          String // "Threshold: BP > 160/100"
+  detail                String?
+  aiRationale           String?
+  metrics               Json? // averages, slope, consecutive count, ...
+  vitalId               String? // reading that triggered it (threshold alerts)
+  dedupeKey             String        @unique // makes Kafka redelivery + retries idempotent
+  clinicalNote          String?
+  noteSharedWithPatient Boolean       @default(false)
   followUpRequestedAt   DateTime?
   followUpNote          String?
-  triggeredAt    DateTime      @default(now())
-  acknowledgedAt DateTime?
-  acknowledgedById String?
-  resolvedAt     DateTime?
-  createdAt      DateTime      @default(now())
-  updatedAt      DateTime      @updatedAt
+  triggeredAt           DateTime      @default(now())
+  acknowledgedAt        DateTime?
+  acknowledgedById      String?
+  resolvedAt            DateTime?
+  createdAt             DateTime      @default(now())
+  updatedAt             DateTime      @updatedAt
 
   patient        Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
   acknowledgedBy Doctor? @relation(fields: [acknowledgedById], references: [id], onDelete: SetNull)
@@ -193,7 +290,6 @@ model Alert {
 }
 
 // Latest Gemini clinical assessment (doctor "Gemini trend analysis" box). One row per patient.
-// Also acts as the LLM cache/cooldown marker, so Redis isn't needed for the MVP.
 model PatientInsight {
   patientId   String      @id
   narrative   String
@@ -222,4 +318,40 @@ model WeeklySummary {
 
   @@unique([patientId, weekStart])
   @@index([patientId, weekStart(sort: Desc)])
+}
+
+// ───────────────────────────── Communications & Notifications ─────────────────────────────
+
+model Notification {
+  id        String           @id @default(cuid())
+  userId    String
+  title     String
+  message   String
+  type      NotificationType @default(SYSTEM)
+  read      Boolean          @default(false)
+  link      String?
+  metadata  Json?
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, read])
+  @@index([userId, createdAt(sort: Desc)])
+}
+
+model Message {
+  id           String   @id @default(cuid())
+  assignmentId String
+  senderId     String
+  content      String
+  read         Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  assignment CareAssignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  sender     User           @relation(fields: [senderId], references: [id], onDelete: Cascade)
+
+  @@index([assignmentId, createdAt])
+  @@index([senderId])
 }

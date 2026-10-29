@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import { Outlet, useNavigate } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
 import Sidebar, { NavItem } from "./Sidebar";
-import BottomTabBar from "./BottomTabBar";
 import NotificationBell from "./NotificationBell";
 import UserMenu from "./UserMenu";
 import { patientsService } from "@/services/patientsService";
@@ -11,6 +10,7 @@ import { AlertItem } from "@/types";
 const navItems: NavItem[] = [
   { to: "/doctor/dashboard", label: "Patients", icon: "patients" },
   { to: "/doctor/alerts", label: "Alerts", icon: "alerts" },
+  { to: "/doctor/chat", label: "Messages", icon: "chat" },
 ];
 
 export default function DoctorLayout() {
@@ -59,7 +59,6 @@ export default function DoctorLayout() {
           <Outlet />
         </main>
       </div>
-      <BottomTabBar items={withBadge} />
     </div>
   );
 }

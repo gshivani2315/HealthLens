@@ -19,12 +19,25 @@ export default function LogVitals() {
   const [glucoseContext, setGlucoseContext] = useState<GlucoseContext>("fasting");
   const [weight, setWeight] = useState("");
   const [sleepHours, setSleepHours] = useState(7);
+  const [heartRate, setHeartRate] = useState("");
   const [recordedAt, setRecordedAt] = useState(() => nowIso().slice(0, 16));
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     if (!user) return;
+
+    const hasAnyVital = systolic || diastolic || glucose || weight || heartRate;
+    if (!hasAnyVital) {
+      showToast("Please enter at least one reading before submitting.", "error");
+      return;
+    }
+
+    if ((systolic && !diastolic) || (!systolic && diastolic)) {
+      showToast("Please enter both systolic and diastolic blood pressure, or neither.", "error");
+      return;
+    }
+
     setIsSubmitting(true);
     try {
       await vitalsService.submitVitals(user.id, {
@@ -34,9 +47,10 @@ export default function LogVitals() {
         glucoseContext,
         weightKg: weight ? Number(weight) : undefined,
         sleepHours,
+        heartRate: heartRate ? Number(heartRate) : undefined,
         recordedAt: new Date(recordedAt).toISOString(),
       });
-      showToast("Vitals submitted");
+      showToast("Vitals submitted successfully");
       navigate("/patient/dashboard");
     } catch (err) {
       showToast(err instanceof Error ? err.message : "Couldn't submit vitals", "error");
@@ -106,48 +120,63 @@ export default function LogVitals() {
           </div>
         </fieldset>
 
+        {/* Heart Rate Field */}
         <fieldset>
-          <legend className="mb-2 text-sm font-semibold text-ink">Weight (kg)</legend>
-          <input
-            type="number"
-            step="0.1"
-            inputMode="decimal"
-            value={weight}
-            onChange={(e) => setWeight(e.target.value)}
-            placeholder="72.5"
-            className="input"
-          />
+          <legend className="mb-2 text-sm font-semibold text-ink">Resting Heart Rate (bpm)</legend>
+          <Field label="Pulse / Heart rate (beats per minute)">
+            <input
+              type="number"
+              inputMode="numeric"
+              value={heartRate}
+              onChange={(e) => setHeartRate(e.target.value)}
+              placeholder="72"
+              className="input"
+            />
+          </Field>
         </fieldset>
 
-        <fieldset>
-          <legend className="mb-2 flex items-center justify-between text-sm font-semibold text-ink">
-            Sleep duration
-            <span className="font-mono tabular text-teal-600">{sleepHours.toFixed(1)} hrs</span>
-          </legend>
-          <input
-            type="range"
-            min={0}
-            max={12}
-            step={0.5}
-            value={sleepHours}
-            onChange={(e) => setSleepHours(Number(e.target.value))}
-            className="w-full accent-teal-500"
-          />
-        </fieldset>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Weight (kg)">
+            <input
+              type="number"
+              step="0.1"
+              inputMode="decimal"
+              value={weight}
+              onChange={(e) => setWeight(e.target.value)}
+              placeholder="72.5"
+              className="input"
+            />
+          </Field>
+          <Field label={`Sleep last night (${sleepHours}h)`}>
+            <input
+              type="range"
+              min="0"
+              max="14"
+              step="0.5"
+              value={sleepHours}
+              onChange={(e) => setSleepHours(Number(e.target.value))}
+              className="w-full"
+            />
+          </Field>
+        </div>
 
-        <fieldset>
-          <legend className="mb-2 text-sm font-semibold text-ink">Timestamp</legend>
+        <Field label="Date & time of reading">
           <input
             type="datetime-local"
             value={recordedAt}
             onChange={(e) => setRecordedAt(e.target.value)}
             className="input"
           />
-        </fieldset>
+        </Field>
 
-        <Button type="submit" size="lg" className="w-full" isLoading={isSubmitting}>
-          Submit vitals
-        </Button>
+        <div className="flex justify-end gap-3 pt-2">
+          <Button type="button" variant="secondary" onClick={() => navigate(-1)}>
+            Cancel
+          </Button>
+          <Button type="submit" isLoading={isSubmitting}>
+            Save readings
+          </Button>
+        </div>
       </Card>
     </div>
   );
@@ -155,9 +184,9 @@ export default function LogVitals() {
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <label className="block">
-      <span className="mb-1 block text-xs font-medium text-ink-400">{label}</span>
+    <div>
+      <label className="mb-1 block text-xs font-medium text-ink-500">{label}</label>
       {children}
-    </label>
+    </div>
   );
 }

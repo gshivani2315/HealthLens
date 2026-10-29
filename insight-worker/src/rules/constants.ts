@@ -2,7 +2,17 @@ import type { PatientThreshold } from "@prisma/client";
 
 export const DAY_MS = 24 * 60 * 60 * 1000;
 
-export type ThresholdValues = Omit<PatientThreshold, "patientId" | "updatedAt">;
+export type ThresholdValues = {
+  systolicMax: number;
+  diastolicMax: number;
+  glucoseFastingMax: number;
+  glucoseFastingMin: number;
+  glucosePostMealMax: number;
+  weightDeltaKg: number;
+  weightDeltaDays: number;
+  heartRateMax?: number;
+  heartRateMin?: number;
+};
 
 /** Used when a patient has no PatientThreshold row. Mirrors the defaults in the frontend mock data. */
 export const DEFAULT_THRESHOLDS: ThresholdValues = {
@@ -13,18 +23,27 @@ export const DEFAULT_THRESHOLDS: ThresholdValues = {
   glucosePostMealMax: 180,
   weightDeltaKg: 2,
   weightDeltaDays: 7,
+  heartRateMax: 120,
+  heartRateMin: 50,
 };
 
-export function resolveThresholds(row: PatientThreshold | null): ThresholdValues {
+export function resolveThresholds(row: any): ThresholdValues {
   if (!row) return DEFAULT_THRESHOLDS;
-  const { patientId: _patientId, updatedAt: _updatedAt, ...values } = row;
-  return values;
+  return {
+    systolicMax: row.systolicMax ?? DEFAULT_THRESHOLDS.systolicMax,
+    diastolicMax: row.diastolicMax ?? DEFAULT_THRESHOLDS.diastolicMax,
+    glucoseFastingMax: row.glucoseFastingMax ?? DEFAULT_THRESHOLDS.glucoseFastingMax,
+    glucoseFastingMin: row.glucoseFastingMin ?? DEFAULT_THRESHOLDS.glucoseFastingMin,
+    glucosePostMealMax: row.glucosePostMealMax ?? DEFAULT_THRESHOLDS.glucosePostMealMax,
+    weightDeltaKg: row.weightDeltaKg ?? DEFAULT_THRESHOLDS.weightDeltaKg,
+    weightDeltaDays: row.weightDeltaDays ?? DEFAULT_THRESHOLDS.weightDeltaDays,
+    heartRateMax: row.heartRateMax ?? DEFAULT_THRESHOLDS.heartRateMax,
+    heartRateMin: row.heartRateMin ?? DEFAULT_THRESHOLDS.heartRateMin,
+  };
 }
 
 /**
  * Heuristic knobs for the trend detector and the "is this an emergency" glucose ceiling.
- * These are engineering defaults, NOT clinical guidance – have a clinician review them before
- * anything resembling real use.
  */
 export const CLINICAL = {
   historyDays: 30,

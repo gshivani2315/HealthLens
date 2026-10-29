@@ -1,10 +1,11 @@
+// frontend/src/pages/doctor/Dashboard.tsx
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/context/ToastContext";
 import { patientsService } from "@/services/patientsService";
 import { alertsService } from "@/services/alertsService";
-import { CreatePatientPayload, DoctorOverview, PatientRosterRow, RiskStatus, UpdatePatientPayload } from "@/types";
+import { CareInvite, CreatePatientPayload, DoctorOverview, PatientRosterRow, RiskStatus, UpdatePatientPayload } from "@/types";
 import Card, { CardHeader } from "@/components/ui/Card";
 import Badge from "@/components/ui/Badge";
 import Button from "@/components/ui/Button";
@@ -27,11 +28,17 @@ export default function DoctorDashboard() {
 
   // Modal states
   const [isAddOpen, setIsAddOpen] = useState(false);
+  const [isInviteOpen, setIsInviteOpen] = useState(false);
   const [editingPatient, setEditingPatient] = useState<PatientRosterRow | null>(null);
   const [deletingPatient, setDeletingPatient] = useState<PatientRosterRow | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [credentials, setCredentials] = useState<{ name: string; email: string; password: string } | null>(null);
+
+  // Invite creation state
+  const [inviteSpecialty, setInviteSpecialty] = useState("Primary Care");
+  const [invitePatientEmail, setInvitePatientEmail] = useState("");
+  const [generatedInvite, setGeneratedInvite] = useState<CareInvite | null>(null);
 
   // Add Patient Form State
   const [name, setName] = useState("");
@@ -40,11 +47,13 @@ export default function DoctorDashboard() {
   const [dateOfBirth, setDateOfBirth] = useState("1980-01-01");
   const [gender, setGender] = useState("Male");
   const [conditionsInput, setConditionsInput] = useState("Hypertension Stage 1");
+  const [specialty, setSpecialty] = useState("Primary Care");
   const [riskStatus, setRiskStatus] = useState<RiskStatus>("normal");
   const [sys, setSys] = useState<number | "">("");
   const [dia, setDia] = useState<number | "">("");
   const [glu, setGlu] = useState<number | "">("");
   const [weight, setWeight] = useState<number | "">("");
+  const [hr, setHr] = useState<number | "">("");
 
   // Edit Patient Form State
   const [editName, setEditName] = useState("");
@@ -95,11 +104,13 @@ export default function DoctorDashboard() {
     setDateOfBirth("1980-01-01");
     setGender("Male");
     setConditionsInput("Hypertension Stage 1");
+    setSpecialty("Primary Care");
     setRiskStatus("normal");
     setSys("");
     setDia("");
     setGlu("");
     setWeight("");
+    setHr("");
     setFormError(null);
   }
 
@@ -136,11 +147,13 @@ export default function DoctorDashboard() {
       dateOfBirth,
       gender,
       conditions: conditions.length > 0 ? conditions : ["General Monitoring"],
+      specialty: specialty.trim() || "Primary Care",
       riskStatus,
       initialSystolic: typeof sys === "number" ? sys : undefined,
       initialDiastolic: typeof dia === "number" ? dia : undefined,
       initialGlucose: typeof glu === "number" ? glu : undefined,
       initialWeightKg: typeof weight === "number" ? weight : undefined,
+      initialHeartRate: typeof hr === "number" ? hr : undefined,
     };
 
     setIsSubmitting(true);
@@ -149,12 +162,30 @@ export default function DoctorDashboard() {
       if (created.temporaryPassword) {
         setCredentials({ name: payload.name, email: payload.email, password: created.temporaryPassword });
       }
-      showToast(`Patient ${name.trim()} added successfully to your roster.`, "success");
+      showToast(`Patient ${name.trim()} added successfully with active care assignment.`, "success");
       setIsAddOpen(false);
       resetAddForm();
       loadOverview();
     } catch (err) {
       setFormError(err instanceof Error ? err.message : "Failed to add patient");
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
+  async function handleCreateInvite(e: FormEvent) {
+    e.preventDefault();
+    setIsSubmitting(true);
+    try {
+      const inv = await patientsService.createCareInvite({
+        specialty: inviteSpecialty,
+        patientEmail: invitePatientEmail || undefined,
+        daysValid: 14,
+      });
+      setGeneratedInvite(inv);
+      showToast("Invite code generated", "success");
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Failed to generate invite code", "error");
     } finally {
       setIsSubmitting(false);
     }
@@ -203,7 +234,7 @@ export default function DoctorDashboard() {
     setIsSubmitting(true);
     try {
       await patientsService.deletePatient(deletingPatient.id);
-      showToast(`Patient ${deletingPatient.name} removed from your roster.`, "info");
+      showToast(`Care assignment ended for ${deletingPatient.name}.`, "info");
       setDeletingPatient(null);
       loadOverview();
     } catch (err) {
@@ -232,10 +263,18 @@ export default function DoctorDashboard() {
           <p className="section-kicker text-[#B8D0C0]">CLINICAL WORKSPACE · DAILY BRIEFING</p>
           <h1 className="mt-3 font-display text-3xl font-normal tracking-[-.035em] text-white sm:text-4xl">Patient overview</h1>
           <p className="mt-3 max-w-lg text-sm leading-relaxed text-white/70">
-            A considered view of your patient roster, emerging risks, and the people who may need your attention today.
+            Multi-clinic & multi-doctor care management. Review your roster, active threshold alerts, and care assignments.
           </p>
-          <div className="mt-5 inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-3 py-1.5 text-xs font-medium text-white/85">
-            <span className="h-2 w-2 rounded-full bg-moss-500" /> Physician: {user?.name ?? "Doctor"}
+          <div className="mt-5 flex flex-wrap items-center gap-3">
+            <span className="inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-3 py-1.5 text-xs font-medium text-white/85">
+              <span className="h-2 w-2 rounded-full bg-moss-500" /> Physician: {user?.name ?? "Doctor"}
+            </span>
+            <Link
+              to="/doctor/chat"
+              className="inline-flex items-center gap-1.5 rounded-full border border-white/30 bg-white/20 px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-white/30"
+            >
+              Clinical Messages →
+            </Link>
           </div>
         </div>
       </section>
@@ -297,11 +336,11 @@ export default function DoctorDashboard() {
         )}
       </Card>
 
-      {/* Patient Care Roster with Add, Edit, Delete */}
+      {/* Patient Care Roster */}
       <Card padded={false}>
         <div className="flex flex-col gap-4 border-b border-line/80 p-5 sm:flex-row sm:items-center sm:justify-between sm:px-6">
           <div>
-            <div className="flex items-center gap-3">
+            <div className="flex flex-wrap items-center gap-2.5">
               <h3 className="font-display text-xl font-normal text-ink">Assigned patients</h3>
               <button
                 type="button"
@@ -311,15 +350,21 @@ export default function DoctorDashboard() {
                 }}
                 className="inline-flex items-center gap-1.5 rounded-lg bg-teal-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition-all hover:bg-teal-700"
               >
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                  <line x1="12" y1="5" x2="12" y2="19" />
-                  <line x1="5" y1="12" x2="19" y2="12" />
-                </svg>
-                Add Patient
+                + Add Patient
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setGeneratedInvite(null);
+                  setIsInviteOpen(true);
+                }}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-teal-600 bg-white px-3 py-1.5 text-xs font-semibold text-teal-700 shadow-sm transition-all hover:bg-teal-50"
+              >
+                🎟️ Issue Invite Code
               </button>
             </div>
             <p className="mt-1 text-sm text-ink-400">
-              {roster.length} {roster.length === 1 ? "patient" : "patients"} linked to your care
+              {roster.length} {roster.length === 1 ? "patient" : "patients"} with active care assignments
             </p>
           </div>
           <div className="flex flex-col gap-2 sm:flex-row">
@@ -357,10 +402,12 @@ export default function DoctorDashboard() {
             <thead>
               <tr className="border-b border-line bg-[#DDE7DF] text-[10px] uppercase tracking-[0.13em] text-ink-400">
                 <th className="px-4 py-3 font-medium">Patient</th>
+                <th className="px-4 py-3 font-medium">Specialty / Clinic</th>
                 <th className="px-4 py-3 font-medium">Age / Gender</th>
                 <th className="px-4 py-3 font-medium">Condition</th>
                 <th className="px-4 py-3 font-medium">Latest BP</th>
-                <th className="px-4 py-3 font-medium">Latest glucose</th>
+                <th className="px-4 py-3 font-medium">Heart Rate</th>
+                <th className="px-4 py-3 font-medium">Glucose</th>
                 <th className="px-4 py-3 font-medium">Risk</th>
                 <th className="px-4 py-3 text-right font-medium">Manage</th>
               </tr>
@@ -372,12 +419,19 @@ export default function DoctorDashboard() {
                     <p className="font-semibold text-ink">{p.name}</p>
                     {p.email && <p className="text-xs text-ink-400">{p.email}</p>}
                   </td>
+                  <td className="px-4 py-4 text-xs text-ink-500">
+                    <p className="font-medium text-ink">{p.specialty || "Primary Care"}</p>
+                    <p className="text-[11px] text-ink-400">{p.clinicName || "HealthLens Clinic"}</p>
+                  </td>
                   <td className="px-4 py-4 text-ink-500">
                     {p.age} / {p.gender}
                   </td>
                   <td className="px-4 py-4 text-ink-500">{p.primaryCondition}</td>
                   <td className="px-4 py-4 font-mono tabular text-ink-500">
                     {p.latestBloodPressure ? `${p.latestBloodPressure.systolic}/${p.latestBloodPressure.diastolic}` : "—"}
+                  </td>
+                  <td className="px-4 py-4 font-mono tabular text-ink-500">
+                    {p.latestHeartRate != null ? `${p.latestHeartRate} bpm` : "—"}
                   </td>
                   <td className="px-4 py-4 font-mono tabular text-ink-500">{p.latestGlucose ?? "—"}</td>
                   <td className="px-4 py-4">
@@ -401,9 +455,9 @@ export default function DoctorDashboard() {
                       <button
                         type="button"
                         onClick={() => setDeletingPatient(p)}
-                        className="rounded border border-line bg-white px-2.5 py-1 text-xs font-semibold text-brick-600 shadow-sm hover:border-brick-300 hover:bg-brick-50"
+                        className="rounded border border-line bg-white px-2.5 py-1 text-xs font-semibold text-brick-600 shadow-sm hover:border-brick-400 hover:bg-brick-50"
                       >
-                        Delete
+                        End
                       </button>
                     </div>
                   </td>
@@ -411,33 +465,8 @@ export default function DoctorDashboard() {
               ))}
               {roster.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="px-4 py-12 text-center text-sm text-ink-400">
-                    <div className="mx-auto max-w-sm space-y-3">
-                      <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-ink-100 text-ink-500">
-                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                          <circle cx="12" cy="7" r="4" />
-                          <path d="M5.5 21a8.38 8.38 0 0 1 13 0" />
-                        </svg>
-                      </div>
-                      <p className="font-display text-base font-semibold text-ink">No patients in this view</p>
-                      <p className="text-xs text-ink-400">
-                        {overview.totalPatients === 0
-                          ? "You don't have any patients linked to your roster yet. Add your first patient to begin tracking vitals."
-                          : "No patients matched your search or risk filter criteria."}
-                      </p>
-                      {overview.totalPatients === 0 && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            resetAddForm();
-                            setIsAddOpen(true);
-                          }}
-                          className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-teal-600 px-4 py-2 text-xs font-semibold text-white shadow-sm hover:bg-teal-700"
-                        >
-                          + Add First Patient
-                        </button>
-                      )}
-                    </div>
+                  <td colSpan={9} className="px-4 py-8 text-center text-xs text-ink-400">
+                    No active patients matching your filter. Use "Add Patient" or "Issue Invite Code" to link patients.
                   </td>
                 </tr>
               )}
@@ -446,13 +475,77 @@ export default function DoctorDashboard() {
         </div>
       </Card>
 
-      {/* ADD PATIENT MODAL */}
-      <Modal open={isAddOpen} onClose={() => setIsAddOpen(false)} title="Add New Patient">
-        <form onSubmit={handleAddPatient} className="space-y-4">
-          <p className="text-xs text-ink-400">
-            Register a patient under your care. The patient will be linked to physician {user?.name ?? "Doctor"}.
-          </p>
+      {/* ISSUE INVITE CODE MODAL */}
+      <Modal open={isInviteOpen} onClose={() => setIsInviteOpen(false)} title="Issue Patient Invite Code">
+        {generatedInvite ? (
+          <div className="space-y-4">
+            <div className="rounded-xl border border-teal-200 bg-teal-50 p-4 text-center">
+              <p className="text-xs font-semibold uppercase tracking-wider text-teal-800">Invite Code</p>
+              <p className="mt-2 font-mono text-3xl font-bold tracking-widest text-teal-900 select-all">
+                {generatedInvite.code}
+              </p>
+              <p className="mt-2 text-xs text-teal-700">
+                Specialty: {generatedInvite.specialty} • Valid for 14 days
+              </p>
+            </div>
+            <p className="text-xs text-ink-500 leading-relaxed">
+              Give this code to your patient. When they self-register at{" "}
+              <span className="font-semibold text-ink">/register</span> or submit the code in their profile,
+              an active care assignment will be automatically established between you.
+            </p>
+            <div className="flex justify-end gap-2 pt-2">
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  navigator.clipboard.writeText(generatedInvite.code);
+                  showToast("Invite code copied to clipboard", "success");
+                }}
+              >
+                Copy Code
+              </Button>
+              <Button onClick={() => setIsInviteOpen(false)}>Done</Button>
+            </div>
+          </div>
+        ) : (
+          <form onSubmit={handleCreateInvite} className="space-y-4">
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-ink">Specialty Label *</label>
+              <input
+                type="text"
+                required
+                value={inviteSpecialty}
+                onChange={(e) => setInviteSpecialty(e.target.value)}
+                placeholder="e.g. Cardiology, Endocrinology, Primary Care"
+                className="w-full rounded border border-line px-3 py-2 text-sm text-ink focus:border-teal-400 focus:outline-none"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-ink">
+                Patient Email Restriction <span className="text-xs font-normal text-ink-400">(optional)</span>
+              </label>
+              <input
+                type="email"
+                value={invitePatientEmail}
+                onChange={(e) => setInvitePatientEmail(e.target.value)}
+                placeholder="patient@example.com (leave blank for any patient)"
+                className="w-full rounded border border-line px-3 py-2 text-sm text-ink focus:border-teal-400 focus:outline-none"
+              />
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <Button type="button" variant="secondary" onClick={() => setIsInviteOpen(false)}>
+                Cancel
+              </Button>
+              <Button type="submit" isLoading={isSubmitting}>
+                Generate Invite Code
+              </Button>
+            </div>
+          </form>
+        )}
+      </Modal>
 
+      {/* ADD PATIENT MODAL */}
+      <Modal open={isAddOpen} onClose={() => setIsAddOpen(false)} title="Add Patient to Care Roster">
+        <form onSubmit={handleAddPatient} className="space-y-4">
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div>
               <label className="mb-1 block text-xs font-semibold text-ink">Full Name *</label>
@@ -461,7 +554,7 @@ export default function DoctorDashboard() {
                 required
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                placeholder="e.g. Eleanor Vance"
+                placeholder="Eleanor Vance"
                 className="w-full rounded border border-line px-3 py-2 text-sm text-ink focus:border-teal-400 focus:outline-none"
               />
             </div>
@@ -515,6 +608,32 @@ export default function DoctorDashboard() {
             </div>
           </div>
 
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-ink">Care Specialty *</label>
+              <input
+                type="text"
+                required
+                value={specialty}
+                onChange={(e) => setSpecialty(e.target.value)}
+                placeholder="e.g. Cardiology, Primary Care"
+                className="w-full rounded border border-line px-3 py-2 text-sm text-ink focus:border-teal-400 focus:outline-none"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-ink">Initial Clinical Risk</label>
+              <select
+                value={riskStatus}
+                onChange={(e) => setRiskStatus(e.target.value as RiskStatus)}
+                className="w-full rounded border border-line px-3 py-2 text-sm text-ink focus:border-teal-400 focus:outline-none"
+              >
+                <option value="normal">Normal</option>
+                <option value="moderate">Moderate</option>
+                <option value="critical">Critical</option>
+              </select>
+            </div>
+          </div>
+
           <div>
             <label className="mb-1 block text-xs font-semibold text-ink">
               Chronic Conditions (comma-separated) *
@@ -529,22 +648,10 @@ export default function DoctorDashboard() {
             />
           </div>
 
-          <div>
-            <label className="mb-1 block text-xs font-semibold text-ink">Initial Clinical Risk Assessment</label>
-            <select
-              value={riskStatus}
-              onChange={(e) => setRiskStatus(e.target.value as RiskStatus)}
-              className="w-full rounded border border-line px-3 py-2 text-sm text-ink focus:border-teal-400 focus:outline-none"
-            >
-              <option value="normal">Normal</option>
-              <option value="moderate">Moderate</option>
-              <option value="critical">Critical</option>
-            </select>
-          </div>
-
+          {/* Initial Baseline Readings with Heart Rate */}
           <div className="rounded-lg border border-dashed border-line bg-paper p-3">
             <p className="mb-2 text-xs font-semibold text-ink">Initial Baseline Readings (Optional)</p>
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
               <div>
                 <label className="block text-[11px] text-ink-500">Systolic</label>
                 <input
@@ -562,6 +669,16 @@ export default function DoctorDashboard() {
                   placeholder="80"
                   value={dia}
                   onChange={(e) => setDia(e.target.value ? Number(e.target.value) : "")}
+                  className="w-full rounded border border-line px-2 py-1.5 text-xs text-ink"
+                />
+              </div>
+              <div>
+                <label className="block text-[11px] text-ink-500">Heart Rate (bpm)</label>
+                <input
+                  type="number"
+                  placeholder="72"
+                  value={hr}
+                  onChange={(e) => setHr(e.target.value ? Number(e.target.value) : "")}
                   className="w-full rounded border border-line px-2 py-1.5 text-xs text-ink"
                 />
               </div>
@@ -595,7 +712,7 @@ export default function DoctorDashboard() {
               Cancel
             </Button>
             <Button type="submit" isLoading={isSubmitting}>
-              Add Patient to Care Roster
+              Add Patient with Care Assignment
             </Button>
           </div>
         </form>
@@ -692,54 +809,55 @@ export default function DoctorDashboard() {
               Cancel
             </Button>
             <Button type="submit" isLoading={isSubmitting}>
-              Save Changes
+              Save Profile Changes
             </Button>
           </div>
         </form>
       </Modal>
 
-      {/* DELETE CONFIRMATION MODAL */}
-      <Modal open={!!deletingPatient} onClose={() => setDeletingPatient(null)} title="Remove Patient">
+      {/* END CARE ASSIGNMENT MODAL */}
+      <Modal open={!!deletingPatient} onClose={() => setDeletingPatient(null)} title="End Care Assignment">
         <div className="space-y-4">
           <p className="text-sm text-ink">
-            Are you sure you want to remove <span className="font-semibold text-ink">{deletingPatient?.name}</span> from
-            your care roster?
+            Are you sure you want to end your active care assignment for{" "}
+            <span className="font-semibold text-ink">{deletingPatient?.name}</span>?
           </p>
           <p className="text-xs text-ink-400">
-            This will unassign the patient from your clinical supervision and remove their records from active telemetry monitoring.
+            This closes your active supervision and locks messaging for this assignment. The patient’s account,
+            historical telemetry, and care assignments with other physicians remain unaffected.
           </p>
           <div className="flex justify-end gap-2 pt-3">
             <Button variant="secondary" onClick={() => setDeletingPatient(null)}>
               Cancel
             </Button>
             <Button variant="danger" isLoading={isSubmitting} onClick={handleDeletePatient}>
-              Remove Patient
+              End Care Assignment
             </Button>
           </div>
         </div>
       </Modal>
 
-      {/* PATIENT CREDENTIALS MODAL */}
-      <Modal open={!!credentials} onClose={() => setCredentials(null)} title="Patient login created">
-        <div className="space-y-3">
+      {/* CREDENTIALS MODAL */}
+      <Modal open={!!credentials} onClose={() => setCredentials(null)} title="Patient Login Credentials">
+        <div className="space-y-4">
           <p className="text-sm text-ink">
-            Give these sign-in details to <span className="font-semibold">{credentials?.name}</span>. The password is shown only once.
+            Account created for <span className="font-semibold">{credentials?.name}</span>. Provide these login details
+            to the patient so they can sign in:
           </p>
-          <div className="rounded-lg border border-line bg-paper p-3 font-mono text-sm text-ink">
-            <p>Email: {credentials?.email}</p>
-            <p>Temporary password: {credentials?.password}</p>
+          <div className="rounded-lg border border-line bg-paper p-4 font-mono text-xs space-y-2">
+            <p>
+              <span className="text-ink-400 select-none">Email: </span>
+              <span className="font-semibold text-ink select-all">{credentials?.email}</span>
+            </p>
+            <p>
+              <span className="text-ink-400 select-none">Temporary Password: </span>
+              <span className="font-semibold text-ink select-all">{credentials?.password}</span>
+            </p>
           </div>
-          <p className="text-xs text-ink-400">Ask them to change it under Account settings after signing in.</p>
-          <div className="flex justify-end gap-2">
-            <Button
-              variant="secondary"
-              onClick={() =>
-                credentials &&
-                navigator.clipboard?.writeText(`Email: ${credentials.email}\nTemporary password: ${credentials.password}`)
-              }
-            >
-              Copy
-            </Button>
+          <p className="text-xs text-brick-600">
+            ⚠️ This password is shown only once. Please copy or share it before closing this window.
+          </p>
+          <div className="flex justify-end pt-2">
             <Button onClick={() => setCredentials(null)}>Done</Button>
           </div>
         </div>
@@ -748,15 +866,14 @@ export default function DoctorDashboard() {
   );
 }
 
-function StatCard({ label, value, tone }: { label: string; value: number; tone?: RiskStatus }) {
+function StatCard({ label, value, tone = "normal" }: { label: string; value: number; tone?: "normal" | "critical" | "moderate" }) {
   return (
-    <Card className="editorial-card group relative overflow-hidden border-white/80 bg-[linear-gradient(145deg,#FFFFFF_0%,#FAF7F0_100%)]">
-      <div className="absolute right-0 top-0 h-20 w-20 -translate-y-8 translate-x-8 rounded-full border border-line/70 transition-transform duration-500 group-hover:translate-x-5" />
-      <p className="relative text-[10px] font-semibold uppercase tracking-[0.15em] text-ink-400">{label}</p>
+    <Card className="flex flex-col justify-between">
+      <span className="text-xs font-semibold uppercase tracking-wider text-ink-400">{label}</span>
       <p
         className={cx(
-          "relative mt-3 font-mono tabular text-4xl font-medium tracking-tight sm:text-[2.6rem]",
-          tone === "critical" ? "text-brick-500" : tone === "moderate" ? "text-amber-600" : "text-ink"
+          "mt-2 font-mono text-3xl font-bold tracking-tight",
+          tone === "critical" && value > 0 ? "text-brick-600" : tone === "moderate" && value > 0 ? "text-amber-600" : "text-ink"
         )}
       >
         {value}

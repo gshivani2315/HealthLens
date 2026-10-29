@@ -1,15 +1,8 @@
-// Backend contract:
-//   GET    /patients/:id/profile         -> PatientProfile
-//   PATCH  /patients/:id/profile         { partial fields } -> PatientProfile
-//   GET    /doctor/overview              -> DoctorOverview
-//   GET    /doctor/patients/:id          -> PatientDetail
-//   GET    /doctor/patients?search=&filter=critical|needs_review -> PatientRosterRow[]
-//   POST   /doctor/patients              { ...CreatePatientPayload } -> PatientRosterRow
-//   PATCH  /doctor/patients/:id          { ...UpdatePatientPayload } -> PatientProfile
-//   DELETE /doctor/patients/:id          -> 204
-
+// frontend/src/services/patientsService.ts
 import { apiClient, mockDelay, USE_MOCKS } from "./apiClient";
 import {
+  Clinic,
+  CareInvite,
   CreatePatientPayload,
   CreatePatientResult,
   Doctor,
@@ -18,6 +11,7 @@ import {
   PatientProfile,
   PatientRosterRow,
   UpdatePatientPayload,
+  WeeklySummary,
 } from "@/types";
 import {
   createPatientMock,
@@ -139,5 +133,104 @@ export const patientsService = {
       return { ...mockDoctor };
     }
     return apiClient.patch<Doctor>("/doctor/profile", updates);
+  },
+
+  // ── Clinics & Memberships ──
+  async getClinics(): Promise<Clinic[]> {
+    if (USE_MOCKS) {
+      return mockDelay([
+        {
+          id: "clinic_001",
+          name: "Meridian Family Health",
+          phone: "+1 (555) 019-2231",
+          address: "1200 Healthcare Blvd, Suite 400",
+          role: "PHYSICIAN",
+          activePatientsCount: 6,
+          staffCount: 3,
+        },
+      ]);
+    }
+    return apiClient.get<Clinic[]>("/doctor/clinics");
+  },
+
+  async createClinic(payload: { name: string; phone?: string; address?: string }): Promise<Clinic> {
+    if (USE_MOCKS) {
+      return mockDelay({
+        id: `clinic_${Date.now()}`,
+        name: payload.name,
+        phone: payload.phone,
+        address: payload.address,
+        role: "PHYSICIAN",
+        activePatientsCount: 0,
+        staffCount: 1,
+      });
+    }
+    return apiClient.post<Clinic>("/doctor/clinics", payload);
+  },
+
+  // ── Invites (Patient Self-registration linking) ──
+  async getDoctorInvites(): Promise<CareInvite[]> {
+    if (USE_MOCKS) {
+      return mockDelay([
+        {
+          id: "inv_1",
+          code: "HL-DEMO-2026",
+          doctorId: "doc_001",
+          doctorName: "Dr. Elena Ruiz",
+          specialty: "Primary Care",
+          status: "PENDING",
+          expiresAt: new Date(Date.now() + 7 * 86400000).toISOString(),
+          createdAt: new Date().toISOString(),
+        },
+      ]);
+    }
+    return apiClient.get<CareInvite[]>("/invites");
+  },
+
+  async createCareInvite(payload: {
+    clinicId?: string;
+    specialty?: string;
+    patientEmail?: string;
+    daysValid?: number;
+  }): Promise<CareInvite> {
+    if (USE_MOCKS) {
+      const code = `HL-${Math.random().toString(36).substring(2, 6).toUpperCase()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+      return mockDelay({
+        id: `inv_${Date.now()}`,
+        code,
+        doctorId: "doc_001",
+        doctorName: "Dr. Elena Ruiz",
+        specialty: payload.specialty || "Primary Care",
+        patientEmail: payload.patientEmail,
+        status: "PENDING",
+        expiresAt: new Date(Date.now() + (payload.daysValid || 14) * 86400000).toISOString(),
+        createdAt: new Date().toISOString(),
+      });
+    }
+    return apiClient.post<CareInvite>("/invites", payload);
+  },
+
+  async acceptCareInvite(code: string): Promise<any> {
+    if (USE_MOCKS) {
+      return mockDelay({ success: true, message: "Connected to doctor" });
+    }
+    return apiClient.post<any>("/invites/accept", { code });
+  },
+
+  // ── Manual Weekly Summary Trigger ──
+  async generateWeeklySummary(patientId: string): Promise<WeeklySummary> {
+    if (USE_MOCKS) {
+      await mockDelay(undefined, 800);
+      return {
+        id: `sum_${Date.now()}`,
+        patientId,
+        weekStart: new Date().toISOString(),
+        weekEnd: new Date().toISOString(),
+        generatedAt: new Date().toISOString(),
+        narrative: "Manual summary generated. Patient vitals tracking within targets.",
+        takeaways: ["Readings steady", "Manual clinical assessment completed"],
+      };
+    }
+    return apiClient.post<WeeklySummary>(`/doctor/patients/${patientId}/generate-summary`);
   },
 };

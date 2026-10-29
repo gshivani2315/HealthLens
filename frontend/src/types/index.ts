@@ -1,8 +1,5 @@
-// ---------------------------------------------------------------------------
-// Shared domain types. These mirror the tables in the architecture diagram
-// (Users, Patients, Vitals, Alerts, Summaries) so the backend team can return
-// JSON shaped exactly like this without the frontend needing to change.
-// ---------------------------------------------------------------------------
+// frontend/src/types/index.ts
+// Shared domain types mirroring the HealthLens database schema & API contracts
 
 export type UserRole = "patient" | "doctor";
 
@@ -26,11 +23,22 @@ export interface DoctorRegisterPayload {
   phone?: string;
 }
 
+export interface PatientRegisterPayload {
+  name: string;
+  email: string;
+  password: string;
+  phone?: string;
+  dateOfBirth?: string;
+  gender?: string;
+  inviteCode?: string;
+}
+
 export interface AuthResponse {
   token: string;
-  refreshToken?: string;   // absent in mock mode
+  refreshToken?: string;
   expiresAt?: number;
   user: AuthUser;
+  linkedCare?: any;
 }
 
 export type RiskStatus = "normal" | "moderate" | "critical";
@@ -38,6 +46,79 @@ export type AlertSeverity = "info" | "caution" | "critical";
 export type AlertType = "threshold" | "ai_pattern";
 export type AlertStatus = "unread" | "acknowledged" | "resolved";
 export type GlucoseContext = "fasting" | "post_meal";
+export type AssignmentStatus = "PENDING" | "ACTIVE" | "ENDED";
+export type InviteStatus = "PENDING" | "ACCEPTED" | "EXPIRED" | "CANCELLED";
+export type NotificationType = "CRITICAL_ALERT" | "VISIT_REQUEST" | "SYSTEM" | "CHAT" | "CARE_ASSIGNMENT";
+
+export interface Clinic {
+  id: string;
+  name: string;
+  phone?: string;
+  address?: string;
+  role?: string;
+  activePatientsCount?: number;
+  staffCount?: number;
+}
+
+export interface CareAssignment {
+  assignmentId: string;
+  doctorId: string;
+  doctorName: string;
+  specialty: string;
+  clinicName?: string;
+  clinicPhone?: string;
+  assignedAt?: string | null;
+  status?: AssignmentStatus;
+}
+
+export interface CareInvite {
+  id: string;
+  code: string;
+  doctorId: string;
+  doctorName?: string;
+  clinicId?: string;
+  clinicName?: string;
+  specialty?: string;
+  patientEmail?: string;
+  status: InviteStatus;
+  expiresAt: string;
+  createdAt: string;
+}
+
+export interface AppNotification {
+  id: string;
+  userId: string;
+  title: string;
+  message: string;
+  type: NotificationType;
+  read: boolean;
+  link?: string;
+  metadata?: any;
+  createdAt: string;
+}
+
+export interface ChatMessage {
+  id: string;
+  assignmentId: string;
+  senderId: string;
+  senderName: string;
+  senderRole: "patient" | "doctor";
+  content: string;
+  read: boolean;
+  createdAt: string;
+}
+
+export interface ChatThread {
+  assignmentId: string;
+  status: AssignmentStatus;
+  specialty: string;
+  clinic?: { id?: string; name: string; phone?: string } | null;
+  patient: { id: string; name: string; email: string };
+  doctor: { id: string; name: string; email: string };
+  lastMessage?: { content: string; senderId: string; createdAt: string } | null;
+  assignedAt: string;
+  endedAt?: string | null;
+}
 
 export interface Doctor {
   id: string;
@@ -45,6 +126,7 @@ export interface Doctor {
   clinicName: string;
   phone?: string;
   email: string;
+  specialty?: string;
   assignedDate?: string; // ISO date
 }
 
@@ -64,6 +146,9 @@ export interface PatientProfile {
   conditions: ChronicCondition[];
   doctor: Doctor;
   doctorId?: string;
+  specialty?: string;
+  clinic?: { id?: string; name: string; phone?: string } | null;
+  careTeam?: CareAssignment[];
 }
 
 export interface PatientRosterRow {
@@ -76,9 +161,13 @@ export interface PatientRosterRow {
   age: number;
   gender: string;
   primaryCondition: string;
+  specialty?: string;
+  clinicName?: string;
+  careTeamCount?: number;
   conditions?: ChronicCondition[];
   latestBloodPressure: { systolic: number; diastolic: number } | null;
   latestGlucose: number | null;
+  latestHeartRate?: number | null;
   riskStatus: RiskStatus;
   lastReadingAt: string | null; // ISO datetime
 }
@@ -91,11 +180,14 @@ export interface CreatePatientPayload {
   gender: string;
   conditions: string[];
   riskStatus?: RiskStatus;
+  clinicId?: string;
+  specialty?: string;
   initialSystolic?: number;
   initialDiastolic?: number;
   initialGlucose?: number;
   initialWeightKg?: number;
   initialSleepHours?: number;
+  initialHeartRate?: number;
 }
 
 export interface UpdatePatientPayload {
@@ -106,6 +198,8 @@ export interface UpdatePatientPayload {
   gender?: string;
   conditions?: string[];
   riskStatus?: RiskStatus;
+  clinicId?: string;
+  specialty?: string;
 }
 
 export interface VitalsEntry {
@@ -118,6 +212,7 @@ export interface VitalsEntry {
   glucoseContext?: GlucoseContext;
   weightKg?: number;
   sleepHours?: number;
+  heartRate?: number;
 }
 
 export interface VitalsSubmission {
@@ -127,6 +222,7 @@ export interface VitalsSubmission {
   glucoseContext?: GlucoseContext;
   weightKg?: number;
   sleepHours?: number;
+  heartRate?: number;
   recordedAt: string;
 }
 
@@ -146,6 +242,7 @@ export interface DashboardSnapshot {
     glucose: MetricChange;
     weight: MetricChange;
     sleep: MetricChange;
+    heartRate?: MetricChange;
   };
   aiInsight: {
     generatedAt: string;
@@ -157,6 +254,7 @@ export interface DashboardSnapshot {
     systolic: number;
     diastolic: number;
     glucose: number;
+    heartRate?: number;
   }[];
 }
 
@@ -194,10 +292,11 @@ export interface TrendPoint {
   glucose?: number;
   weightKg?: number;
   sleepHours?: number;
+  heartRate?: number;
 }
 
 export type TrendRange = "7d" | "30d" | "90d";
-export type VitalFilter = "all" | "bp" | "glucose" | "weight" | "sleep";
+export type VitalFilter = "all" | "bp" | "glucose" | "weight" | "sleep" | "heartRate";
 
 export interface TrendSummaryStats {
   average: number;
@@ -217,7 +316,7 @@ export interface DoctorOverview {
 export interface PatientDetail {
   profile: PatientProfile;
   riskStatus: RiskStatus;
-  aiClinicalInsight: { generatedAt: string; narrative: string } | null;   // was non-null;
+  aiClinicalInsight: { generatedAt: string; narrative: string } | null;
   alertHistory: AlertItem[];
   vitalsLog: VitalsEntry[];
 }
@@ -231,6 +330,8 @@ export interface ThresholdConfig {
   glucosePostMealMax: number;
   weightDeltaKg: number;
   weightDeltaDays: number;
+  heartRateMax?: number;
+  heartRateMin?: number;
 }
 
 export type CreatePatientResult = PatientRosterRow & { temporaryPassword?: string };

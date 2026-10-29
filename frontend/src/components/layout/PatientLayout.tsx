@@ -13,6 +13,7 @@ const navItems: NavItem[] = [
   { to: "/patient/log-vitals", label: "Log Vitals", icon: "log" },
   { to: "/patient/trends", label: "Trends", icon: "trends" },
   { to: "/patient/insights", label: "Insights", icon: "insights" },
+  { to: "/patient/chat", label: "Messages", icon: "chat" },
 ];
 
 export default function PatientLayout() {
