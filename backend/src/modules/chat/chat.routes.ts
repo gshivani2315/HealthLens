@@ -1,6 +1,7 @@
+// backend/src/modules/chat/chat.routes.ts   (your existing paths, plus /unread-count)
 import { Router } from 'express';
 import { requireAuth } from '../../middleware/auth';
-import { getChatAssignmentsForUser, getAssignmentMessages, sendMessage } from './chat.service';
+import { getChatAssignmentsForUser, getAssignmentMessages, sendMessage, getUnreadCount } from './chat.service';
 
 const router = Router();
 
@@ -11,6 +12,15 @@ router.get('/assignments', async (req, res, next) => {
   try {
     const list = await getChatAssignmentsForUser(req.user!.dbUserId, req.user!.role);
     res.json(list);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /chat/unread-count - total unread messages across ACTIVE threads (sidebar badge)
+router.get('/unread-count', async (req, res, next) => {
+  try {
+    res.json({ count: await getUnreadCount(req.user!.dbUserId) });
   } catch (err) {
     next(err);
   }
@@ -48,4 +58,3 @@ router.post('/assignments/:assignmentId/messages', async (req, res, next) => {
 });
 
 export default router;
-

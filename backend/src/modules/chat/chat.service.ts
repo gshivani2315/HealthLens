@@ -1,5 +1,14 @@
+// backend/src/modules/chat/chat.service.ts   (replaces current; same exports, same response shapes)
+import { AssignmentStatus } from '@prisma/client';
 import { prisma } from '../../db';
-import { createNotification } from '../notifications/notification.service';
+import { notifyNewMessage } from '../../lib/notify'; // in-app notification + throttled EmailJS email
+
+// Ended assignments stay READABLE (history) but are closed for new messages. PENDING ones have no chat at all.
+// To hide history once care ends, remove ENDED here.
+const READABLE_STATUSES = [AssignmentStatus.ACTIVE, AssignmentStatus.ENDED];
+const MAX_LENGTH = 2000;
+const MAX_PER_MINUTE = 30;
+const HISTORY_LIMIT = 500;
 
 export async function getChatAssignmentsForUser(userId: string, role: 'PATIENT' | 'DOCTOR') {
   let whereClause: any = {};
@@ -15,47 +24,41 @@ export async function getChatAssignmentsForUser(userId: string, role: 'PATIENT' 
   }
 
   const assignments = await prisma.careAssignment.findMany({
-    where: whereClause,
+    where: { ...whereClause, status: { in: READABLE_STATUSES } },
     include: {
       patient: { include: { user: true } },
       doctor: { include: { user: true } },
       clinic: true,
-      messages: {
-        orderBy: { createdAt: 'desc' },
-        take: 1,
-      },
+      messages: { orderBy: { createdAt: 'desc' }, take: 1 },
+      // unread = sent by the OTHER person and not yet read
+      _count: { select: { messages: { where: { read: false, senderId: { not: userId } } } } },
     },
-    orderBy: { updatedAt: 'desc' },
   });
 
-  return assignments.map((a: any) => {
-    const lastMsg = a.messages?.[0] || null;
-    return {
-      assignmentId: a.id,
-      status: a.status,
-      specialty: a.specialty,
-      clinic: a.clinic ? { id: a.clinic.id, name: a.clinic.name, phone: a.clinic.phone } : null,
-      patient: {
-        id: a.patient.id,
-        name: a.patient.user.name,
-        email: a.patient.user.email,
-      },
-      doctor: {
-        id: a.doctor.id,
-        name: a.doctor.user.name,
-        email: a.doctor.user.email,
-      },
-      lastMessage: lastMsg
-        ? {
-            content: lastMsg.content,
-            senderId: lastMsg.senderId,
-            createdAt: lastMsg.createdAt.toISOString(),
-          }
-        : null,
-      assignedAt: a.assignedAt.toISOString(),
-      endedAt: a.endedAt ? a.endedAt.toISOString() : null,
-    };
-  });
+  return assignments
+    .map((a: any) => {
+      const lastMsg = a.messages?.[0] || null;
+      return {
+        // updatedAt isn't touched by new messages, so sort by the last message instead
+        sortKey: (lastMsg?.createdAt ?? a.assignedAt).getTime() as number,
+        thread: {
+          assignmentId: a.id,
+          status: a.status,
+          specialty: a.specialty,
+          clinic: a.clinic ? { id: a.clinic.id, name: a.clinic.name, phone: a.clinic.phone } : null,
+          patient: { id: a.patient.id, name: a.patient.user.name, email: a.patient.user.email },
+          doctor: { id: a.doctor.id, name: a.doctor.user.name, email: a.doctor.user.email },
+          lastMessage: lastMsg
+            ? { content: lastMsg.content, senderId: lastMsg.senderId, createdAt: lastMsg.createdAt.toISOString() }
+            : null,
+          unreadCount: a._count?.messages ?? 0,
+          assignedAt: a.assignedAt.toISOString(),
+          endedAt: a.endedAt ? a.endedAt.toISOString() : null,
+        },
+      };
+    })
+    .sort((x: any, y: any) => y.sortKey - x.sortKey)
+    .map((x: any) => x.thread);
 }
 
 export async function getAssignmentMessages(assignmentId: string, userId: string) {
@@ -68,32 +71,29 @@ export async function getAssignmentMessages(assignmentId: string, userId: string
     },
   });
 
-  if (!assignment) return { error: 404, message: 'Care assignment not found' };
-
-  // Verify access: user must be either the assigned patient or the assigned doctor
-  const isPatient = assignment.patient.userId === userId;
-  const isDoctor = assignment.doctor.userId === userId;
-
-  if (!isPatient && !isDoctor) {
-    return { error: 403, message: 'Forbidden: You are not authorized to view messages for this care assignment' };
+  // Not found, not a party to it, or still PENDING: all the same 404, so ids can't be probed
+  // (a 403 would confirm that the conversation exists).
+  if (
+    !assignment ||
+    (assignment.patient.userId !== userId && assignment.doctor.userId !== userId) ||
+    !READABLE_STATUSES.includes(assignment.status as any)
+  ) {
+    return { error: 404, message: 'Conversation not found' };
   }
 
-  // Mark unread messages sent by the other party as read
-  await prisma.message.updateMany({
-    where: {
-      assignmentId,
-      senderId: { not: userId },
-      read: false,
-    },
-    data: { read: true },
+  // Newest HISTORY_LIMIT messages, shown oldest-first
+  const rows = await prisma.message.findMany({
+    where: { assignmentId },
+    include: { sender: { select: { id: true, name: true, role: true } } },
+    orderBy: { createdAt: 'desc' },
+    take: HISTORY_LIMIT,
   });
 
-  const messages = await prisma.message.findMany({
-    where: { assignmentId },
-    include: {
-      sender: { select: { id: true, name: true, role: true } },
-    },
-    orderBy: { createdAt: 'asc' },
+  // Opening the thread marks the other person's messages as read. notifyNewMessage relies on this flag
+  // to send at most ONE email per unread burst.
+  await prisma.message.updateMany({
+    where: { assignmentId, senderId: { not: userId }, read: false },
+    data: { read: true },
   });
 
   return {
@@ -106,7 +106,7 @@ export async function getAssignmentMessages(assignmentId: string, userId: string
       doctorName: assignment.doctor.user.name,
       isEnded: assignment.status !== 'ACTIVE',
     },
-    messages: messages.map((m: any) => ({
+    messages: rows.reverse().map((m: any) => ({
       id: m.id,
       assignmentId: m.assignmentId,
       senderId: m.senderId,
@@ -122,23 +122,17 @@ export async function getAssignmentMessages(assignmentId: string, userId: string
 export async function sendMessage(assignmentId: string, senderUserId: string, content: string) {
   const assignment = await prisma.careAssignment.findUnique({
     where: { id: assignmentId },
-    include: {
-      patient: { include: { user: true } },
-      doctor: { include: { user: true } },
-    },
+    include: { patient: true, doctor: true },
   });
 
-  if (!assignment) return { error: 404, message: 'Care assignment not found' };
-
-  // Access check
-  const isPatient = assignment.patient.userId === senderUserId;
-  const isDoctor = assignment.doctor.userId === senderUserId;
-
-  if (!isPatient && !isDoctor) {
-    return { error: 403, message: 'Forbidden: You are not part of this care assignment' };
+  if (
+    !assignment ||
+    (assignment.patient.userId !== senderUserId && assignment.doctor.userId !== senderUserId)
+  ) {
+    return { error: 404, message: 'Conversation not found' };
   }
 
-  // CRITICAL REQUIREMENT: "One thread per doctor–patient assignment, so it ends when access ends"
+  // One thread per doctor-patient assignment: it closes when the assignment ends.
   if (assignment.status !== 'ACTIVE') {
     return {
       error: 403,
@@ -147,34 +141,29 @@ export async function sendMessage(assignmentId: string, senderUserId: string, co
   }
 
   const trimmed = content.trim();
-  if (!trimmed) {
-    return { error: 400, message: 'Message content cannot be empty' };
+  if (!trimmed) return { error: 400, message: 'Message content cannot be empty' };
+  if (trimmed.length > MAX_LENGTH) {
+    return { error: 400, message: `Message is too long (max ${MAX_LENGTH} characters)` };
+  }
+
+  // Stateless flood guard (survives restarts, works across several server instances)
+  const recent = await prisma.message.count({
+    where: { senderId: senderUserId, createdAt: { gte: new Date(Date.now() - 60_000) } },
+  });
+  if (recent >= MAX_PER_MINUTE) {
+    return { error: 429, message: 'You are sending messages too quickly. Please wait a moment.' };
   }
 
   const message = await prisma.message.create({
-    data: {
-      assignmentId,
-      senderId: senderUserId,
-      content: trimmed,
-      read: false,
-    },
-    include: {
-      sender: { select: { id: true, name: true, role: true } },
-    },
+    data: { assignmentId, senderId: senderUserId, content: trimmed, read: false },
+    include: { sender: { select: { id: true, name: true, role: true } } },
   });
 
-  // Notify the other party
-  const recipientUserId = isPatient ? assignment.doctor.userId : assignment.patient.userId;
-  const senderName = message.sender.name;
-
-  await createNotification({
-    userId: recipientUserId,
-    title: `New message from ${senderName}`,
-    message: trimmed.length > 80 ? `${trimmed.slice(0, 77)}...` : trimmed,
-    type: 'CHAT',
-    link: isPatient ? `/doctor/patients/${assignment.patient.id}` : `/patient/dashboard`,
-    metadata: { assignmentId, messageId: message.id },
-  }).catch((err) => console.error('[Chat] Notification failed:', err));
+  // In-app bell for the recipient, plus (doctor -> patient only, throttled) one EmailJS email.
+  // Replaces the old inline createNotification, which also linked to the wrong pages
+  // (/doctor/patients/:id and /patient/dashboard instead of the chat). Not awaited: a slow or failing
+  // email provider must never delay or fail a send.
+  notifyNewMessage(message.id);
 
   return {
     message: {
@@ -190,3 +179,16 @@ export async function sendMessage(assignmentId: string, senderUserId: string, co
   };
 }
 
+/** For a sidebar badge. */
+export async function getUnreadCount(userId: string): Promise<number> {
+  return prisma.message.count({
+    where: {
+      read: false,
+      senderId: { not: userId },
+      assignment: {
+        status: AssignmentStatus.ACTIVE,
+        OR: [{ doctor: { userId } }, { patient: { userId } }],
+      },
+    },
+  });
+}

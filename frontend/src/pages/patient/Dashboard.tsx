@@ -146,13 +146,25 @@ export default function PatientDashboard() {
           {alerts.length === 0 && <p className="mt-4 text-sm text-ink-500">No alerts recently — nice and steady.</p>}
           <ul className="mt-4 space-y-3">
             {alerts.slice(0, 3).map((a) => (
-              <li key={a.id} className="flex items-start gap-3 border-b border-[#c5d9cc] pb-3 last:border-0 last:pb-0">
-                <span className="mt-1 h-2 w-2 shrink-0 rounded-full bg-amber-500" />
-                <div className="flex-1">
-                  <p className="text-sm font-semibold text-ink">{a.triggerLabel}</p>
-                  <p className="text-xs text-ink-500">{timeAgo(a.triggeredAt)}</p>
-                </div>
-              </li>
+            <li key={a.id} className="flex items-start gap-3 border-b border-[#c5d9cc] pb-3 last:border-0 last:pb-0">
+              <span className="mt-1 h-2 w-2 shrink-0 rounded-full bg-amber-500" />
+              <div className="flex-1">
+                <p className="text-sm font-semibold text-ink">{a.triggerLabel}</p>
+                <p className="text-xs text-ink-500">
+                  {timeAgo(a.triggeredAt)} ·{" "}
+                  {a.status === "unread" ? "Sent to your care team" : a.status === "acknowledged" ? "Reviewed by your doctor" : "Resolved"}
+                </p>
+                {a.clinicalNote && (
+                  <p className="mt-1 text-xs italic text-ink-500">Note from your doctor: {a.clinicalNote}</p>
+                )}
+                {a.followUp && a.status !== "resolved" && (
+                  <p className="mt-1 rounded-lg bg-amber-50 px-2 py-1 text-xs font-medium text-amber-800">
+                    Visit requested {timeAgo(a.followUp.requestedAt)}
+                    {a.followUp.note ? ` — "${a.followUp.note}"` : ""}
+                  </p>
+                )}
+              </div>
+            </li>
             ))}
           </ul>
         </section>
